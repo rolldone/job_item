@@ -1,0 +1,9 @@
+src_path: http://100.114.33.35:5280/api/config/client/0502f9ba-d65c-409b-9a44-3c10791fd228
+
+jobs:
+ - name : job1
+   key : send_email
+   cmd : ping -c 20 localhost
+ - name : job2
+   key : generate_html_to_image
+   cmd : ping -c 20 localhost
