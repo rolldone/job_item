@@ -5,14 +5,27 @@ import (
 	"fmt"
 	"job_item/support"
 	"log"
+	"os"
 	"os/exec"
 	"runtime"
+
+	"github.com/hoisie/mustache"
 )
 
+type DataBodyType map[string]interface{}
+
+func (c *DataBodyType) ToJSON() (string, error) {
+	gg, err := json.Marshal(c)
+	if err != nil {
+		return "", err
+	}
+	return string(gg), nil
+}
+
 type MessageJson struct {
-	Task_id string                 `json:"task_id"`
-	Data    map[string]interface{} `json:"data"`
-	Action  string                 `json:"action,omitempty"`
+	Task_id string       `json:"task_id"`
+	Data    DataBodyType `json:"data"`
+	Action  string       `json:"action,omitempty"`
 }
 
 func JobManagerEventConstruct() JobManagerEvent {
@@ -40,6 +53,7 @@ func (c *JobManagerEvent) ListenEvent(conn_name string) {
 	uuid := support.Helper.ConfigYaml.ConfigData.Uuid
 	jobs := *support.Helper.ConfigYaml.ConfigData.Jobs
 	for _, v := range jobs {
+		jobConfig := v
 		// var unsubcribe func()
 		sub_key := fmt.Sprint(uuid, "_", v.Key)
 		fmt.Println("sub_key", sub_key)
@@ -51,7 +65,12 @@ func (c *JobManagerEvent) ListenEvent(conn_name string) {
 				if messageObject.Action == "terminate" {
 					support.Helper.EventBus.GetBus().Publish(fmt.Sprint(messageObject.Task_id, "_", "terminate"))
 				} else {
-					go c.RunGoroutine(v.Cmd, messageObject.Task_id)
+					dataString, _ := messageObject.Data.ToJSON()
+					f, _ := os.Create(fmt.Sprint(messageObject.Task_id, ".json"))
+					f.WriteString(dataString)
+					f.Close()
+					cmd := mustache.Render(jobConfig.Cmd, map[string]string{"task_id": messageObject.Task_id})
+					go c.RunGoroutine(cmd, messageObject.Task_id)
 				}
 			}(message)
 		})
