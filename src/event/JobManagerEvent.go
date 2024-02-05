@@ -50,33 +50,43 @@ func (c *JobManagerEvent) ListenEvent(conn_name string) {
 	// Then get the data connection by connection key
 	conn := support.Helper.BrokerConnection.GetConnection(conn_name)
 	c.conn = conn
-	uuid := support.Helper.ConfigYaml.ConfigData.Uuid
-	jobs := *support.Helper.ConfigYaml.ConfigData.Jobs
+	project_app_uuid := support.Helper.ConfigYaml.ConfigData.Uuid
+	job_datas := support.Helper.ConfigYaml.ConfigData.Project.Job_datas
+	jobs := support.Helper.ConfigYaml.ConfigData.Jobs
 	for _, v := range jobs {
 		jobConfig := v
-		// var unsubcribe func()
-		sub_key := fmt.Sprint(uuid, "_", v.Key)
-		fmt.Println("sub_key", sub_key)
-		_, err := conn.Sub(sub_key, uuid, func(message string) {
-			// fmt.Println(sub_key, " :: ", message)
-			go func(message string) {
-				messageObject := MessageJson{}
-				json.Unmarshal([]byte(message), &messageObject)
-				if messageObject.Action == "terminate" {
-					support.Helper.EventBus.GetBus().Publish(fmt.Sprint(messageObject.Task_id, "_", "terminate"))
-				} else {
-					dataString, _ := messageObject.Data.ToJSON()
-					f, _ := os.Create(fmt.Sprint(messageObject.Task_id, ".json"))
-					f.WriteString(dataString)
-					f.Close()
-					cmd := mustache.Render(jobConfig.Cmd, map[string]string{"task_id": messageObject.Task_id})
-					go c.RunGoroutine(cmd, messageObject.Task_id)
+		isMatch := false
+		for _, x := range job_datas {
+			if x.Event == v.Event {
+				isMatch = true
+				// var unsubcribe func()
+				sub_key := fmt.Sprint(project_app_uuid, ".", v.Event)
+				_, err := conn.Sub(sub_key, project_app_uuid, func(message string) {
+					// fmt.Println(sub_key, " :: ", message)
+					go func(message string) {
+						messageObject := MessageJson{}
+						json.Unmarshal([]byte(message), &messageObject)
+						if messageObject.Action == "terminate" {
+							support.Helper.EventBus.GetBus().Publish(fmt.Sprint(messageObject.Task_id, "_", "terminate"))
+						} else {
+							dataString, _ := messageObject.Data.ToJSON()
+							f, _ := os.Create(fmt.Sprint(messageObject.Task_id, ".json"))
+							f.WriteString(dataString)
+							f.Close()
+							cmd := mustache.Render(jobConfig.Cmd, map[string]string{"task_id": messageObject.Task_id})
+							go c.RunGoroutine(cmd, messageObject.Task_id)
+						}
+					}(message)
+				})
+				if err != nil {
+					log.Println(err)
+					break
 				}
-			}(message)
-		})
-		if err != nil {
-			log.Println(err)
-			break
+				break
+			}
+		}
+		if !isMatch {
+			fmt.Println("Event :", v.Event, " not register yet. Please check on job manager with app project that you register it.")
 		}
 	}
 }

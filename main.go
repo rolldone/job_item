@@ -19,39 +19,45 @@ func main() {
 	supportSupport := support.SupportConstruct()
 
 	brokerConnectionSupport := support.BrokerConnectionSupportContruct()
-
 	configYamlSupport := support.ConfigYamlSupportContruct()
-	fmt.Println("configYamlSupport :: ", configYamlSupport.ConfigData)
-
 	supportSupport.Register(configYamlSupport)
 
 	eventBusSupport := support.EventBusConstruct()
 	supportSupport.Register(eventBusSupport)
 
-	for _, v := range configYamlSupport.ConfigData.Broker_connections {
-		switch v["type"].(string) {
-		case "nats":
-			// Load the nats library.
-			// Init nats broker.
-			natsBrokerCon := configYamlSupport.GetNatsBrokerCon(configYamlSupport.GetTypeBrokerCon(v))
-			natSupport := support.NatsSupportConstruct(natsBrokerCon)
-			brokerConnectionSupport.RegisterConnection(v["key"].(string), natSupport)
-		case "rabbitmq":
-		}
+	harwareInfoSuppport := support.HardwareInfoSupportConstruct()
+	supportSupport.Register(harwareInfoSuppport)
+
+	fmt.Println("configYamlSupport", configYamlSupport.ConfigData.Broker_connection)
+
+	currentConnection := configYamlSupport.ConfigData.Broker_connection
+	switch currentConnection["type"].(string) {
+	case "nats":
+		// Load the nats library.
+		// Init nats broker.
+		natsBrokerCon := configYamlSupport.GetNatsBrokerCon(configYamlSupport.GetTypeBrokerCon(currentConnection))
+		natSupport := support.NatsSupportConstruct(natsBrokerCon)
+		brokerConnectionSupport.RegisterConnection(currentConnection["key"].(string), natSupport)
+	case "rabbitmq":
 	}
 
 	supportSupport.Register(brokerConnectionSupport)
 
+	// Check the own event have regsiter to job manager event
 	jobManagerEvent := event.JobManagerEventConstruct()
-	for _, v := range configYamlSupport.ConfigData.Broker_connections {
-		switch v["type"].(string) {
-		case "nats":
-			// Load the nats library.
-			// Init nats broker.
-			jobManagerEvent.ListenEvent(v["key"].(string))
-		case "rabbitmq":
-		}
+	postOwnInfoEvent := event.ListenOwnHardwareInfoEvent{}
+	brokCon := configYamlSupport.ConfigData.Broker_connection
+	switch brokCon["type"].(string) {
+	case "nats":
+		// Load the nats library.
+		// Init nats broker.
+		jobManagerEvent.ListenEvent(brokCon["key"].(string))
+		postOwnInfoEvent.ListenInfoHardware(brokCon["key"].(string))
+		postOwnInfoEvent.ListenInfoNetwork(brokCon["key"].(string))
+		postOwnInfoEvent.ListenInfoUsage(brokCon["key"].(string))
+	case "rabbitmq":
 	}
+
 	runtime.Goexit()
 
 	fmt.Println("Exit")

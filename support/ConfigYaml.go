@@ -3,10 +3,12 @@ package support
 import (
 	"encoding/json"
 	"fmt"
+	"job_item/support/model"
 	"log"
 	"net/http"
 	"os"
 
+	"dario.cat/mergo"
 	"gopkg.in/yaml.v3"
 )
 
@@ -40,20 +42,21 @@ type BrokerConInterface interface {
 
 type ConfigJob struct {
 	// Local
-	Name string `yaml:"name"`
-	Key  string `yaml:"key"`
-	Cmd  string `yaml:"cmd"`
+	Name  string `yaml:"name"`
+	Event string `yaml:"event"`
+	Cmd   string `yaml:"cmd"`
 	// Import
 	Pub_type string
 }
 
 type ConfigData struct {
 	// Local
-	Src_path string       `yaml:"src_path"`
-	Jobs     *[]ConfigJob `yaml:"jobs" json:"jobs,omitempty"`
+	Src_path string `yaml:"src_path"`
 	// Import
-	Uuid               string
-	Broker_connections []map[string]interface{} `yaml:"broker_connections"`
+	Uuid              string
+	Broker_connection map[string]interface{}
+	Project           model.ProjectDataView
+	Jobs              []ConfigJob
 }
 
 func ConfigYamlSupportContruct() *ConfigYamlSupport {
@@ -102,9 +105,8 @@ func (c *ConfigYamlSupport) loadServerCOnfig() {
 		panic(1)
 	}
 	// configData := bodyData["return"].(ConfigData)
-	c.ConfigData.Uuid = bodyData.Return.Uuid
-	c.ConfigData.Broker_connections = bodyData.Return.Broker_connections
-	fmt.Println("configData", c.ConfigData)
+	c.ConfigData.Broker_connection = bodyData.Return.Broker_connection
+	mergo.Merge(&c.ConfigData, bodyData.Return)
 }
 
 func (c *ConfigYamlSupport) GetTypeBrokerCon(v map[string]interface{}) BrokerConInterface {
