@@ -1,9 +1,9 @@
-src_path: http://100.114.33.35:5280/api/config/client/0502f9ba-d65c-409b-9a44-3c10791fd228
+src_path: http://100.114.33.35:5280/api/config/client/246cb982-8bb0-417f-8440-1202c2451d24
 
 jobs:
  - name : job1
-   key : send_email
-   cmd : ping -c 20 localhost
+   event : vdfv
+   cmd : ping -c 5 localhost && cat {{task_id}}.json && rm {{task_id}}.json
  - name : job2
-   key : generate_html_to_image
+   event : generate_html_to_image
    cmd : ping -c 20 localhost
