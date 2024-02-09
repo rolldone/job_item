@@ -141,7 +141,8 @@ func (c *JobManagerEvent) WatchProcessCMD(cmd *exec.Cmd, task_id string) {
 				break
 			}
 			fmt.Println("stdout :: ", string(out[:n]))
-			conn.Pub(task_id+"_process", fmt.Sprint("stdout :: ", string(out[:n])))
+			// conn.Pub(task_id+"_process", fmt.Sprint("stdout :: ", string(out[:n])))
+			conn.Pub(task_id+"_process", string(out[:n]))
 		}
 	}(c.conn)
 	go func() {
