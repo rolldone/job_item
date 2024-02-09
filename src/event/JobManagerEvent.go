@@ -97,7 +97,7 @@ func (c *JobManagerEvent) RunGoroutine(command string, task_id string) {
 		c.conn.Pub(fmt.Sprint(task_id, "_", "finish"), "finish")
 	}()
 	if runtime.GOOS == "windows" {
-		cmd := exec.Command("cmd", command)
+		cmd := exec.Command("cmd", "/K", command)
 		c.WatchProcessCMD(cmd, task_id)
 	} else {
 		cmd := exec.Command("bash", "-c", command)
