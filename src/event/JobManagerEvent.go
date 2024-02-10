@@ -66,7 +66,9 @@ func (c *JobManagerEvent) ListenEvent(conn_name string) {
 					go func(message string) {
 						messageObject := MessageJson{}
 						json.Unmarshal([]byte(message), &messageObject)
-						if messageObject.Action == "terminate" {
+						if messageObject.Action == GetStatus().STATUS_TIMEOUT {
+							support.Helper.EventBus.GetBus().Publish(fmt.Sprint(messageObject.Task_id, "_", "timeout"))
+						} else if messageObject.Action == GetStatus().STATUS_TERMINATE {
 							support.Helper.EventBus.GetBus().Publish(fmt.Sprint(messageObject.Task_id, "_", "terminate"))
 						} else {
 							dataString, _ := messageObject.Data.ToJSON()
@@ -94,7 +96,7 @@ func (c *JobManagerEvent) ListenEvent(conn_name string) {
 func (c *JobManagerEvent) RunGoroutine(command string, task_id string) {
 	defer func() {
 		fmt.Println("Closed goroutine")
-		c.conn.Pub(fmt.Sprint(task_id, "_", "finish"), "finish")
+		c.conn.Pub(fmt.Sprint(task_id, "_", "finish"), GetStatus().STATUS_FINISH)
 	}()
 	if runtime.GOOS == "windows" {
 		cmd := exec.Command("cmd", "/K", command)
@@ -106,6 +108,22 @@ func (c *JobManagerEvent) RunGoroutine(command string, task_id string) {
 }
 
 func (c *JobManagerEvent) WatchProcessCMD(cmd *exec.Cmd, task_id string) {
+
+	// Create function kill process
+	killProcess := func() {
+		cmd.Process.Kill()
+	}
+
+	// Subcribe the kill process action
+	support.Helper.EventBus.GetBus().SubscribeOnce(fmt.Sprint(task_id, "_", "timeout"), killProcess)
+	support.Helper.EventBus.GetBus().SubscribeOnce(fmt.Sprint(task_id, "_", "terminate"), killProcess)
+
+	// If get defer unsbcribe the event bus
+	defer func() {
+		support.Helper.EventBus.GetBus().Unsubscribe(fmt.Sprint(task_id, "_", "timeout"), killProcess)
+		support.Helper.EventBus.GetBus().Unsubscribe(fmt.Sprint(task_id, "_", "terminate"), killProcess)
+		fmt.Println("Close the subcribe listen timeout and terminate")
+	}()
 
 	// creating a std pipeline
 	stdout, err := cmd.StdoutPipe()
@@ -127,10 +145,6 @@ func (c *JobManagerEvent) WatchProcessCMD(cmd *exec.Cmd, task_id string) {
 	}
 
 	out := make([]byte, 1024)
-
-	support.Helper.EventBus.GetBus().SubscribeOnce(fmt.Sprint(task_id, "_", "terminate"), func() {
-		cmd.Process.Kill()
-	})
 
 	go func(conn support.BrokerConnectionInterface) {
 		for {
@@ -157,4 +171,23 @@ func (c *JobManagerEvent) WatchProcessCMD(cmd *exec.Cmd, task_id string) {
 	}()
 
 	cmd.Wait()
+}
+
+type brokerConStatus struct {
+	STATUS_ERROR     string
+	STATUS_TIMEOUT   string
+	STATUS_TERMINATE string
+	STATUS_FINISH    string
+}
+
+// Create get status follow by Type jobRecordStatus.
+// Define the value by each value.
+// Return in as type jobRecordStatus
+func GetStatus() brokerConStatus {
+	return brokerConStatus{
+		STATUS_ERROR:     "error",
+		STATUS_TIMEOUT:   "timeout",
+		STATUS_TERMINATE: "terminate",
+		STATUS_FINISH:    "finish",
+	}
 }
