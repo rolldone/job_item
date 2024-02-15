@@ -14,8 +14,9 @@ func HardwareInfoSupportConstruct() *HardwareInfoSupport {
 
 type HardwareInfoSupport struct{}
 
-func (c *HardwareInfoSupport) GetInfoHardware() {
+func (c *HardwareInfoSupport) GetInfoHardware() (*host.InfoStat, error) {
 	fmt.Println(host.Info())
+	return host.Info()
 }
 
 func (c *HardwareInfoSupport) GetInfoNetwork() {

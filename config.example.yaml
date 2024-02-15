@@ -1,9 +1,14 @@
-src_path: http://100.114.33.35:5280/api/config/client/246cb982-8bb0-417f-8440-1202c2451d24
-
+credential:
+  project_id: 7bd0c868-87a0-4c90-8d27-559677763bb6
+  secret_key: xxx-xxx-xxx
+end_point: http://134.209.109.179:5280/api/worker/config
 jobs:
- - name : job1
-   event : vdfv
-   cmd : ping -c 5 localhost && cat {{task_id}}.json && rm {{task_id}}.json
- - name : job2
-   event : generate_html_to_image
-   cmd : ping -c 20 localhost
+  - name: Validate Doc And Style
+    event: validate_doc_and_style
+    cmd: cat {{task_id}}.json && rm {{task_id}}.json
+  - name: Send email
+    event: send_email
+    cmd: cat {{task_id}}.json && rm {{task_id}}.json
+  - name: Validate Logo
+    event: validate_logo
+    cmd: cat {{task_id}}.json && rm {{task_id}}.json

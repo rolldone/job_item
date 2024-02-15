@@ -1,6 +1,7 @@
 package support
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"job_item/support/model"
@@ -49,9 +50,15 @@ type ConfigJob struct {
 	Pub_type string
 }
 
+type Credential struct {
+	Project_id string `yaml:"project_id"`
+	Secret_key string `yaml:"secret_key"`
+}
+
 type ConfigData struct {
 	// Local
-	Src_path string `yaml:"src_path"`
+	End_point  string     `yaml:"end_point"`
+	Credential Credential `yaml:"credential"`
 	// Import
 	Uuid              string
 	Broker_connection map[string]interface{}
@@ -84,8 +91,25 @@ func (c *ConfigYamlSupport) loadConfigYaml() {
 }
 
 func (c *ConfigYamlSupport) loadServerCOnfig() {
+	var param = map[string]interface{}{}
+	param["project_id"] = c.ConfigData.Credential.Project_id
+	param["secret_key"] = c.ConfigData.Credential.Secret_key
+	hostInfo, err := Helper.HardwareInfo.GetInfoHardware()
+	if err != nil {
+		fmt.Println("err :: ", err)
+		panic(1)
+	}
+
+	param["host"] = hostInfo
+	jsonDataParam, err := json.Marshal(param)
+	if err != nil {
+		fmt.Println("err :: ", err)
+		panic(1)
+	}
 	var client = &http.Client{}
-	request, err := http.NewRequest("GET", c.ConfigData.Src_path, nil)
+	request, err := http.NewRequest("POST", c.ConfigData.End_point, bytes.NewBuffer(jsonDataParam))
+	// request.Header.Set("X-Custom-Header", "myvalue")
+	request.Header.Set("Content-Type", "application/json")
 	if err != nil {
 		fmt.Println("err :: ", err)
 		panic(1)
