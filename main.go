@@ -39,6 +39,9 @@ func main() {
 		natSupport := support.NatsSupportConstruct(natsBrokerCon)
 		brokerConnectionSupport.RegisterConnection(currentConnection["key"].(string), natSupport)
 	case "rabbitmq":
+		amqpBrokerCon := configYamlSupport.GetRabbitMQBrokenCon(configYamlSupport.GetTypeBrokerCon(currentConnection))
+		amqpSupport := support.AMQPSupportConstruct(amqpBrokerCon)
+		brokerConnectionSupport.RegisterConnection(currentConnection["key"].(string), amqpSupport)
 	}
 
 	supportSupport.Register(brokerConnectionSupport)
@@ -56,6 +59,10 @@ func main() {
 		postOwnInfoEvent.ListenInfoNetwork(brokCon["key"].(string))
 		postOwnInfoEvent.ListenInfoUsage(brokCon["key"].(string))
 	case "rabbitmq":
+		jobManagerEvent.ListenEvent(brokCon["key"].(string))
+		postOwnInfoEvent.ListenInfoHardware(brokCon["key"].(string))
+		postOwnInfoEvent.ListenInfoNetwork(brokCon["key"].(string))
+		postOwnInfoEvent.ListenInfoUsage(brokCon["key"].(string))
 	}
 
 	runtime.Goexit()

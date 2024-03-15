@@ -8,9 +8,9 @@ import (
 )
 
 type JobData_Data struct {
-	Limit_process int                    `json:"limit_process"`
-	Timeout       int                    `json:"timeout"`
-	Body          map[string]interface{} `json:"body,omitempty"`
+	Limit_process int    `json:"limit_process"`
+	Timeout       int    `json:"timeout"`
+	Body          string `json:"body,omitempty"`
 }
 
 // Implement the Valuer interface

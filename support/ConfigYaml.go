@@ -25,15 +25,18 @@ func (c NatsBrokerConnection) GetConnection() any {
 	return c
 }
 
-type RabbitMQ_BrokerConnection struct {
-	Name string `yaml:"name"`
-	Key  string `yaml:"key"`
-	Type string `yaml:"type"`
-	Host string `yaml:"host"`
-	Port int    `yaml:"port"`
+type AMQP_BrokerConnection struct {
+	Name     string `yaml:"name"`
+	Key      string `yaml:"key"`
+	Type     string `yaml:"type"`
+	Host     string `yaml:"host"`
+	Port     int    `yaml:"port"`
+	User     string `yaml:"user"`
+	Password string `yaml:"password"`
+	Exchange string `yaml:"exchange"`
 }
 
-func (c RabbitMQ_BrokerConnection) GetConnection() any {
+func (c AMQP_BrokerConnection) GetConnection() any {
 	return c
 }
 
@@ -77,6 +80,8 @@ type ConfigYamlSupport struct {
 	ConfigData ConfigData
 }
 
+// Load the config from config.yaml.
+// Check it the config problem or not if problem force close.
 func (c *ConfigYamlSupport) loadConfigYaml() {
 	yamlFile, err := os.ReadFile("config.yaml")
 	if err != nil {
@@ -90,6 +95,8 @@ func (c *ConfigYamlSupport) loadConfigYaml() {
 	}
 }
 
+// Request the config to the server and get configuration.
+// Store to the ConfigData Variable.
 func (c *ConfigYamlSupport) loadServerCOnfig() {
 	var param = map[string]interface{}{}
 	param["project_id"] = c.ConfigData.Credential.Project_id
@@ -144,12 +151,14 @@ func (c *ConfigYamlSupport) GetTypeBrokerCon(v map[string]interface{}) BrokerCon
 		natsConf.Type = v["type"].(string)
 		return natsConf
 	case "rabbitmq":
-		rabbitmqConf := RabbitMQ_BrokerConnection{}
+		rabbitmqConf := AMQP_BrokerConnection{}
 		rabbitmqConf.Host = v["host"].(string)
 		rabbitmqConf.Key = v["key"].(string)
 		rabbitmqConf.Name = v["name"].(string)
-		rabbitmqConf.Port = int(v["port"].(int))
+		rabbitmqConf.Port = int(v["port"].(float64))
 		rabbitmqConf.Type = v["type"].(string)
+		rabbitmqConf.User = v["user"].(string)
+		rabbitmqConf.Password = v["password"].(string)
 		return rabbitmqConf
 	}
 	return nil
@@ -164,7 +173,7 @@ func (c ConfigYamlSupport) GetNatsBrokerCon(gg BrokerConInterface) NatsBrokerCon
 	return kk
 }
 
-func (c ConfigYamlSupport) GetRabbitMQBrokenCon(gg BrokerConInterface) RabbitMQ_BrokerConnection {
-	kk := gg.GetConnection().(RabbitMQ_BrokerConnection)
+func (c ConfigYamlSupport) GetRabbitMQBrokenCon(gg BrokerConInterface) AMQP_BrokerConnection {
+	kk := gg.GetConnection().(AMQP_BrokerConnection)
 	return kk
 }
