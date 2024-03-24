@@ -15,21 +15,24 @@ import (
 type ListenOwnHardwareInfoEvent struct{}
 
 type AddPayload_MemOwnHardware struct {
-	Host_id       string                 `json:"host_id"`
-	Data          *mem.VirtualMemoryStat `json:"data"`
-	Time_duration string                 `json:"time_duration"`
+	Host_id           string                 `json:"host_id"`
+	Data              *mem.VirtualMemoryStat `json:"data"`
+	Time_duration     string                 `json:"time_duration"`
+	Project_data_uuid string                 `json:"project_data_uuid"`
 }
 
 type AddPayload_CpuOwnHardware struct {
-	Host_id       string    `json:"host_id"`
-	Data          []float64 `json:"data"`
-	Time_duration string    `json:"time_duration"`
+	Host_id           string    `json:"host_id"`
+	Data              []float64 `json:"data"`
+	Time_duration     string    `json:"time_duration"`
+	Project_data_uuid string    `json:"project_data_uuid"`
 }
 
 type AddPayload_NetOwnHardware struct {
-	Host_id       string                `json:"host_id"`
-	Data          net.InterfaceStatList `json:"data"`
-	Time_duration string                `json:"time_duration"`
+	Host_id           string                `json:"host_id"`
+	Data              net.InterfaceStatList `json:"data"`
+	Time_duration     string                `json:"time_duration"`
+	Project_data_uuid string                `json:"project_data_uuid"`
 }
 
 const (
@@ -101,9 +104,10 @@ func (c *ListenOwnHardwareInfoEvent) ListenInfoUsage(conn_name string) {
 			}
 
 			cp := AddPayload_CpuOwnHardware{
-				Host_id:       hostInfo.HostID,
-				Data:          p,
-				Time_duration: ONE_MINUTE,
+				Host_id:           hostInfo.HostID,
+				Data:              p,
+				Time_duration:     ONE_MINUTE,
+				Project_data_uuid: support.Helper.ConfigYaml.ConfigData.Uuid,
 			}
 
 			pString, err := json.Marshal(cp)
@@ -123,9 +127,10 @@ func (c *ListenOwnHardwareInfoEvent) ListenInfoUsage(conn_name string) {
 			}
 
 			mp := AddPayload_MemOwnHardware{
-				Host_id:       hostInfo.HostID,
-				Data:          v,
-				Time_duration: ONE_MINUTE,
+				Host_id:           hostInfo.HostID,
+				Data:              v,
+				Time_duration:     ONE_MINUTE,
+				Project_data_uuid: support.Helper.ConfigYaml.ConfigData.Uuid,
 			}
 
 			vString, err := json.Marshal(mp)
@@ -161,9 +166,10 @@ func (c *ListenOwnHardwareInfoEvent) ListenInfoNetwork(conn_name string) {
 			}
 
 			cp := AddPayload_NetOwnHardware{
-				Host_id:       hostInfo.HostID,
-				Data:          netInterfaces,
-				Time_duration: ONE_MINUTE,
+				Host_id:           hostInfo.HostID,
+				Data:              netInterfaces,
+				Time_duration:     ONE_MINUTE,
+				Project_data_uuid: support.Helper.ConfigYaml.ConfigData.Uuid,
 			}
 
 			netInterfaceString, err := json.Marshal(cp)

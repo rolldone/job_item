@@ -31,8 +31,21 @@ type NatsSupport struct {
 func (c *NatsSupport) ConnectPubSub() (*nats.Conn, error) {
 	natsHost := c.natConfInfo.Host
 	natsPort := c.natConfInfo.Port
+	natsAuthType := c.natConfInfo.Auth_type
+	natsUser := c.natConfInfo.User
+	natsPassword := c.natConfInfo.Password
+	natsToken := c.natConfInfo.Token
+
 	// Connect to a server
 	url := fmt.Sprint("nats://" + natsHost + ":" + strconv.Itoa(natsPort))
+	switch natsAuthType {
+	case "token":
+		url = fmt.Sprint("nats://" + natsToken + "@" + natsHost + ":" + strconv.Itoa(natsPort))
+	case "user_password":
+		url = fmt.Sprint("nats://" + natsUser + ":" + natsPassword + "@" + natsHost + ":" + strconv.Itoa(natsPort))
+	case "user_password_bcrypt":
+		url = fmt.Sprint("nats://" + natsUser + ":" + natsPassword + "@" + natsHost + ":" + strconv.Itoa(natsPort))
+	}
 	fmt.Println("Nats Connection inf :: ", url)
 	nc, err := nats.Connect(url)
 	c.nc = nc

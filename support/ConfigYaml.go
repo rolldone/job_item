@@ -14,11 +14,15 @@ import (
 )
 
 type NatsBrokerConnection struct {
-	Name string `yaml:"name"`
-	Key  string `yaml:"key"`
-	Type string `yaml:"type"`
-	Host string `yaml:"host"`
-	Port int    `yaml:"port"`
+	Name      string `yaml:"name"`
+	Key       string `yaml:"key"`
+	Type      string `yaml:"type"`
+	Host      string `yaml:"host"`
+	Port      int    `yaml:"port"`
+	Auth_type string `yaml:"auth_type"`
+	User      string `yaml:"user"`
+	Password  string `yaml:"password"`
+	Token     string `yaml:"token"`
 }
 
 func (c NatsBrokerConnection) GetConnection() any {
@@ -149,6 +153,19 @@ func (c *ConfigYamlSupport) GetTypeBrokerCon(v map[string]interface{}) BrokerCon
 		natsConf.Name = v["name"].(string)
 		natsConf.Port = int(v["port"].(float64))
 		natsConf.Type = v["type"].(string)
+		natsConf.Type = v["type"].(string)
+		if v["auth_type"] != nil {
+			natsConf.Auth_type = v["auth_type"].(string)
+		}
+		if v["user"] != nil {
+			natsConf.User = v["user"].(string)
+		}
+		if v["password"] != nil {
+			natsConf.Password = v["password"].(string)
+		}
+		if v["token"] != nil {
+			natsConf.Token = v["token"].(string)
+		}
 		return natsConf
 	case "rabbitmq":
 		rabbitmqConf := AMQP_BrokerConnection{}
