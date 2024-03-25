@@ -53,6 +53,7 @@ func (c *JobManagerEvent) ListenEvent(conn_name string) {
 	project_app_uuid := support.Helper.ConfigYaml.ConfigData.Uuid
 	job_datas := support.Helper.ConfigYaml.ConfigData.Project.Job_datas
 	jobs := support.Helper.ConfigYaml.ConfigData.Jobs
+	unsubcribes := []func(){}
 	for _, v := range jobs {
 		jobConfig := v
 		isMatch := false
@@ -61,7 +62,7 @@ func (c *JobManagerEvent) ListenEvent(conn_name string) {
 				isMatch = true
 				// var unsubcribe func()
 				sub_key := fmt.Sprint(project_app_uuid, ".", v.Event)
-				_, err := conn.Sub(sub_key, project_app_uuid, func(message string) {
+				unsub, err := conn.Sub(sub_key, project_app_uuid, func(message string) {
 					// fmt.Println(sub_key, " :: ", message)
 					go func(message string) {
 						messageObject := MessageJson{}
@@ -75,11 +76,15 @@ func (c *JobManagerEvent) ListenEvent(conn_name string) {
 							f, _ := os.Create(fmt.Sprint(messageObject.Task_id, ".json"))
 							f.WriteString(dataString)
 							f.Close()
-							cmd := mustache.Render(jobConfig.Cmd, map[string]string{"task_id": messageObject.Task_id})
+							messageObject.Data["task_id"] = messageObject.Task_id
+							cmd := mustache.Render(jobConfig.Cmd, messageObject.Data)
 							go c.RunGoroutine(cmd, messageObject.Task_id)
 						}
 					}(message)
 				})
+
+				unsubcribes = append(unsubcribes, unsub)
+
 				if err != nil {
 					log.Println(err)
 					break
