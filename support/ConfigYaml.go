@@ -156,6 +156,9 @@ func (c *ConfigYamlSupport) GetTypeBrokerCon(v map[string]interface{}) BrokerCon
 		natsConf.Type = v["type"].(string)
 		if v["auth_type"] != nil {
 			natsConf.Auth_type = v["auth_type"].(string)
+		} else {
+			fmt.Println("NATS ERR : You need define auth_type : [none | user_password | token], on job_manager")
+			panic(1)
 		}
 		if v["user"] != nil {
 			natsConf.User = v["user"].(string)

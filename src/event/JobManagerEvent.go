@@ -67,19 +67,13 @@ func (c *JobManagerEvent) ListenEvent(conn_name string) {
 					go func(message string) {
 						messageObject := MessageJson{}
 						json.Unmarshal([]byte(message), &messageObject)
-						if messageObject.Action == GetStatus().STATUS_TIMEOUT {
-							support.Helper.EventBus.GetBus().Publish(fmt.Sprint(messageObject.Task_id, "_", "timeout"))
-						} else if messageObject.Action == GetStatus().STATUS_TERMINATE {
-							support.Helper.EventBus.GetBus().Publish(fmt.Sprint(messageObject.Task_id, "_", "terminate"))
-						} else {
-							dataString, _ := messageObject.Data.ToJSON()
-							f, _ := os.Create(fmt.Sprint(messageObject.Task_id, ".json"))
-							f.WriteString(dataString)
-							f.Close()
-							messageObject.Data["task_id"] = messageObject.Task_id
-							cmd := mustache.Render(jobConfig.Cmd, messageObject.Data)
-							go c.RunGoroutine(cmd, messageObject.Task_id)
-						}
+						dataString, _ := messageObject.Data.ToJSON()
+						f, _ := os.Create(fmt.Sprint(messageObject.Task_id, ".json"))
+						f.WriteString(dataString)
+						f.Close()
+						messageObject.Data["task_id"] = messageObject.Task_id
+						cmd := mustache.Render(jobConfig.Cmd, messageObject.Data)
+						go c.RunGoroutine(cmd, messageObject.Task_id)
 					}(message)
 				})
 
@@ -99,7 +93,22 @@ func (c *JobManagerEvent) ListenEvent(conn_name string) {
 }
 
 func (c *JobManagerEvent) RunGoroutine(command string, task_id string) {
+	project_app_uuid := support.Helper.ConfigYaml.ConfigData.Uuid
+	unsub, err := c.conn.Sub(task_id+"_worker", project_app_uuid, func(message string) {
+		// fmt.Println(sub_key, " :: ", message)
+		messageObject := MessageJson{}
+		json.Unmarshal([]byte(message), &messageObject)
+		if messageObject.Action == GetStatus().STATUS_TIMEOUT {
+			support.Helper.EventBus.GetBus().Publish(fmt.Sprint(messageObject.Task_id, "_", "timeout"))
+		} else if messageObject.Action == GetStatus().STATUS_TERMINATE {
+			support.Helper.EventBus.GetBus().Publish(fmt.Sprint(messageObject.Task_id, "_", "terminate"))
+		}
+	})
+	if err != nil {
+		log.Println("RunGoroutine :: err :: 23940239409 :: ", err)
+	}
 	defer func() {
+		unsub()
 		fmt.Println("Closed goroutine")
 		c.conn.Pub(fmt.Sprint(task_id, "_", "finish"), GetStatus().STATUS_FINISH)
 	}()
