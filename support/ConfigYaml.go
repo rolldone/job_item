@@ -1,13 +1,19 @@
 package support
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"job_item/support/model"
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
+	"runtime"
+	"strings"
+	"syscall"
 
 	"dario.cat/mergo"
 	"gopkg.in/yaml.v3"
@@ -67,10 +73,13 @@ type ConfigData struct {
 	End_point  string     `yaml:"end_point"`
 	Credential Credential `yaml:"credential"`
 	// Import
-	Uuid              string
-	Broker_connection map[string]interface{}
-	Project           model.ProjectDataView
-	Jobs              []ConfigJob
+	Uuid                    string
+	Broker_connection       map[string]interface{} `json:"broker_connection,omitempty"`
+	Project                 model.ProjectDataView
+	Jobs                    []ConfigJob
+	Job_item_version_number int    `json:"job_item_version_number,omitempty"`
+	Job_item_version        string `json:"job_item_version,omitempty"`
+	Job_item_link           string `json:"job_item_link,omitempty"`
 }
 
 func ConfigYamlSupportContruct() *ConfigYamlSupport {
@@ -81,7 +90,8 @@ func ConfigYamlSupportContruct() *ConfigYamlSupport {
 }
 
 type ConfigYamlSupport struct {
-	ConfigData ConfigData
+	ConfigData        ConfigData
+	child_process_app *string
 }
 
 // Load the config from config.yaml.
@@ -105,12 +115,16 @@ func (c *ConfigYamlSupport) loadServerCOnfig() {
 	var param = map[string]interface{}{}
 	param["project_id"] = c.ConfigData.Credential.Project_id
 	param["secret_key"] = c.ConfigData.Credential.Secret_key
+
+	os := runtime.GOOS
+	param["os"] = os               // windows | darwin | linux
+	param["arch"] = runtime.GOARCH //  386, amd64, arm, s390x
+
 	hostInfo, err := Helper.HardwareInfo.GetInfoHardware()
 	if err != nil {
 		fmt.Println("err :: ", err)
 		panic(1)
 	}
-
 	param["host"] = hostInfo
 	jsonDataParam, err := json.Marshal(param)
 	if err != nil {
@@ -141,7 +155,121 @@ func (c *ConfigYamlSupport) loadServerCOnfig() {
 	}
 	// configData := bodyData["return"].(ConfigData)
 	c.ConfigData.Broker_connection = bodyData.Return.Broker_connection
+	c.ConfigData.Job_item_version_number = bodyData.Return.Job_item_version_number
+	c.ConfigData.Job_item_link = bodyData.Return.Job_item_link
 	mergo.Merge(&c.ConfigData, bodyData.Return)
+}
+
+func (c *ConfigYamlSupport) DownloadNewApp() error {
+	url := c.ConfigData.Job_item_link
+	outputPath := ""
+	os_type := runtime.GOOS
+	switch os_type {
+	case "windows":
+		outputPath = "job_item.exe"
+	case "darwin":
+		outputPath = "job_item"
+	case "linux":
+		outputPath = "job_item"
+	}
+	c.child_process_app = &outputPath
+	out, err := os.Create(outputPath)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	// Send HTTP GET request
+	resp, err := http.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	// Check response status code
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("server returned non-200 status code: %d", resp.StatusCode)
+	}
+
+	// Copy the response body to the output file
+	_, err = io.Copy(out, resp.Body)
+	if err != nil {
+		return err
+	}
+
+	// Make the downloaded file executable
+	if os_type != "windows" {
+		err = makeExecutable(outputPath)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func makeExecutable(path string) error {
+	cmd := exec.Command("chmod", "+x", path)
+	err := cmd.Run()
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *ConfigYamlSupport) RunChildProcess() (*exec.Cmd, error) {
+	executablePath, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	if c.child_process_app != nil {
+		pwd, err := os.Getwd()
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
+		executablePath = fmt.Sprint(pwd, "/", *c.child_process_app)
+	}
+	var cmd *exec.Cmd
+	os_type := runtime.GOOS
+	switch os_type {
+	case "windows":
+		cmd = exec.Command(executablePath, "child_process")
+	case "darwin":
+		cmd = exec.Command(executablePath, "child_process")
+	case "linux":
+		cmd = exec.Command(executablePath, "child_process")
+	}
+
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: false}
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		fmt.Println("Error creating stdout pipe:", err)
+		return nil, err
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		fmt.Println("Error creating stderr pipe:", err)
+		return nil, err
+	}
+
+	err = cmd.Start()
+	if err != nil {
+		return nil, err
+	}
+
+	go printOutput(stdout)
+	go printOutput(stderr)
+
+	return cmd, nil
+}
+
+func printOutput(reader io.Reader) {
+	scanner := bufio.NewScanner(reader)
+	for scanner.Scan() {
+		fmt.Println(strings.TrimSpace(scanner.Text()))
+	}
 }
 
 func (c *ConfigYamlSupport) GetTypeBrokerCon(v map[string]interface{}) BrokerConInterface {
