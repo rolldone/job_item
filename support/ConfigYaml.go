@@ -13,7 +13,6 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
-	"syscall"
 
 	"dario.cat/mergo"
 	"gopkg.in/yaml.v3"
@@ -241,7 +240,7 @@ func (c *ConfigYamlSupport) RunChildProcess() (*exec.Cmd, error) {
 		cmd = exec.Command(executablePath, "child_process")
 	}
 
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: false}
+	// cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: false}
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
