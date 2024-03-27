@@ -35,8 +35,7 @@ func JobManagerEventConstruct() JobManagerEvent {
 }
 
 type JobManagerEvent struct {
-	conn        support.BrokerConnectionInterface
-	Last_status string
+	conn support.BrokerConnectionInterface
 }
 
 const (
@@ -75,11 +74,14 @@ func (c *JobManagerEvent) ListenEvent(conn_name string) {
 						f.Close()
 						messageObject.Data["task_id"] = messageObject.Task_id
 						cmd := mustache.Render(jobConfig.Cmd, messageObject.Data)
-						go c.RunGoroutine(cmd, messageObject.Task_id)
+						jobManEvItem := JobManagerEventItem{
+							conn: c.conn,
+						}
+						go jobManEvItem.RunGoroutine(cmd, messageObject.Task_id)
 					}(message)
 				})
 
-				unsubcribes = append(unsubcribes, unsub)
+				_ = append(unsubcribes, unsub)
 
 				if err != nil {
 					log.Println(err)
@@ -94,7 +96,12 @@ func (c *JobManagerEvent) ListenEvent(conn_name string) {
 	}
 }
 
-func (c *JobManagerEvent) RunGoroutine(command string, task_id string) {
+type JobManagerEventItem struct {
+	conn        support.BrokerConnectionInterface
+	Last_status string
+}
+
+func (c *JobManagerEventItem) RunGoroutine(command string, task_id string) {
 	project_app_uuid := support.Helper.ConfigYaml.ConfigData.Uuid
 	unsub, err := c.conn.Sub(task_id+"_worker", project_app_uuid, func(message string) {
 		// fmt.Println(sub_key, " :: ", message)
@@ -130,7 +137,7 @@ func (c *JobManagerEvent) RunGoroutine(command string, task_id string) {
 
 }
 
-func (c *JobManagerEvent) WatchProcessCMD(cmd *exec.Cmd, task_id string) {
+func (c *JobManagerEventItem) WatchProcessCMD(cmd *exec.Cmd, task_id string) {
 
 	// Create function kill process
 	killProcess := func() {
