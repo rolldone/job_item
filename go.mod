@@ -23,7 +23,9 @@ require (
 require (
 	dario.cat/mergo v1.0.0
 	github.com/cpuguy83/go-md2man/v2 v2.0.2 // indirect
+	github.com/fsnotify/fsnotify v1.7.0
 	github.com/hoisie/mustache v0.0.0-20160804235033-6375acf62c69
+	github.com/mitchellh/go-ps v1.0.0
 	github.com/nats-io/nats.go v1.32.0
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/shirou/gopsutil/v3 v3.24.1
