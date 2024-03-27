@@ -84,14 +84,19 @@ func main() {
 					return
 				}
 				log.Println("event:", event)
-				if event.Has(fsnotify.Write) {
-					log.Println("modified file:", event.Name)
-					cmd.Process.Kill()
-					cmd = nil
-					run_child <- "restart"
-					fmt.Println("Restart child process")
-					is_done_watch = true
+				log.Println("modified file:", event.Name)
+				err := cmd.Process.Kill()
+				if err != nil {
+					fmt.Println(err)
+					panic(1)
 				}
+				cmd = nil
+				run_child <- "restart"
+				fmt.Println("Restart child process")
+				is_done_watch = true
+				fmt.Println("event.Has(fsnotify.Write) :: ", event.Has(fsnotify.Write))
+				// if event.Has(fsnotify.Write) {
+				// }
 			case err, ok := <-watcher.Errors:
 				if !ok {
 					return

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"time"
 
 	"github.com/hoisie/mustache"
 )
@@ -34,7 +35,8 @@ func JobManagerEventConstruct() JobManagerEvent {
 }
 
 type JobManagerEvent struct {
-	conn support.BrokerConnectionInterface
+	conn        support.BrokerConnectionInterface
+	Last_status string
 }
 
 const (
@@ -99,19 +101,25 @@ func (c *JobManagerEvent) RunGoroutine(command string, task_id string) {
 		messageObject := MessageJson{}
 		json.Unmarshal([]byte(message), &messageObject)
 		if messageObject.Action == GetStatus().STATUS_TIMEOUT {
+			c.Last_status = GetStatus().STATUS_TIMEOUT
 			support.Helper.EventBus.GetBus().Publish(fmt.Sprint(messageObject.Task_id, "_", "timeout"))
 		} else if messageObject.Action == GetStatus().STATUS_TERMINATE {
+			c.Last_status = GetStatus().STATUS_TERMINATE
 			support.Helper.EventBus.GetBus().Publish(fmt.Sprint(messageObject.Task_id, "_", "terminate"))
 		}
 	})
 	if err != nil {
 		log.Println("RunGoroutine :: err :: 23940239409 :: ", err)
 	}
-	defer func() {
+
+	c.Last_status = GetStatus().STATUS_FINISH
+	defer func(last_status *string) {
 		unsub()
 		fmt.Println("Closed goroutine")
-		c.conn.Pub(fmt.Sprint(task_id, "_", "finish"), GetStatus().STATUS_FINISH)
-	}()
+		time.Sleep(time.Duration(time.Second) * 3)
+		c.conn.Pub(fmt.Sprint(task_id, "_", "finish"), *last_status)
+	}(&c.Last_status)
+
 	if runtime.GOOS == "windows" {
 		cmd := exec.Command("cmd", "/K", command)
 		c.WatchProcessCMD(cmd, task_id)
@@ -119,6 +127,7 @@ func (c *JobManagerEvent) RunGoroutine(command string, task_id string) {
 		cmd := exec.Command("bash", "-c", command)
 		c.WatchProcessCMD(cmd, task_id)
 	}
+
 }
 
 func (c *JobManagerEvent) WatchProcessCMD(cmd *exec.Cmd, task_id string) {
@@ -162,6 +171,19 @@ func (c *JobManagerEvent) WatchProcessCMD(cmd *exec.Cmd, task_id string) {
 
 	go func(conn support.BrokerConnectionInterface) {
 		for {
+			n2, err2 := stderr.Read(out)
+			if err2 != nil {
+				fmt.Println("stderr err :: ", err)
+				break
+			}
+			fmt.Println("stderr :: ", string(out[:n2]))
+			conn.Pub(task_id+"_failed", string(out[:n2]))
+			c.Last_status = GetStatus().STATUS_ERROR
+		}
+	}(c.conn)
+
+	go func(conn support.BrokerConnectionInterface) {
+		for {
 			// reading the bytes
 			n, err := stdout.Read(out)
 			if err != nil {
@@ -173,16 +195,6 @@ func (c *JobManagerEvent) WatchProcessCMD(cmd *exec.Cmd, task_id string) {
 			conn.Pub(task_id+"_process", string(out[:n]))
 		}
 	}(c.conn)
-	go func() {
-		for {
-			n2, err2 := stderr.Read(out)
-			if err2 != nil {
-				fmt.Println("stderr err :: ", err)
-				break
-			}
-			fmt.Println("stderr :: ", string(out[:n2]))
-		}
-	}()
 
 	cmd.Wait()
 }
