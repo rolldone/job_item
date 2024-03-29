@@ -19,12 +19,12 @@ type AMQPConfInfo struct {
 	AMQP_EXCHANGE string
 }
 
-func AMQPSupportConstruct(props AMQP_BrokerConnection) *AMQPSupport {
+func AMQPSupportConstruct(props AMQP_BrokerConnection) (*AMQPSupport, error) {
 	gg := AMQPSupport{
 		amqpConfInfo: props,
 	}
-	gg.ConnectPubSub()
-	return &gg
+	_, err := gg.ConnectPubSub()
+	return &gg, err
 }
 
 type AMQPSupport struct {

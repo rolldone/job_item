@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"runtime"
+	"time"
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/urfave/cli/v2"
@@ -41,7 +42,7 @@ func main() {
 	if configYamlSupport.ConfigData.Job_item_version_number > VERSION_NUMBER {
 		// fmt.Println(configYamlSupport.ConfigData.Job_item_version_number, "::", VERSION_NUMBER)
 		fmt.Println("Download New Version :: ", configYamlSupport.ConfigData.Job_item_link)
-		err := configYamlSupport.DownloadNewApp()
+		err := configYamlSupport.DownloadNewApp(configYamlSupport.ConfigData.Job_item_version_number)
 		if err != nil {
 			fmt.Println(err)
 			panic(1)
@@ -150,6 +151,18 @@ func main() {
 
 }
 
+func tryRestartProcess(waitingRecursive int, callback func() bool) {
+	retryConn := true
+	for retryConn {
+		retryConn = callback()
+		if !retryConn {
+			break
+		}
+		fmt.Println("Try restart connection in 5 seconds")
+		time.Sleep(time.Duration(time.Second) * time.Duration(waitingRecursive))
+	}
+}
+
 func initCli() bool {
 	var flag string
 
@@ -185,12 +198,24 @@ func initCli() bool {
 						// Load the nats library.
 						// Init nats broker.
 						natsBrokerCon := configYamlSupport.GetNatsBrokerCon(configYamlSupport.GetTypeBrokerCon(currentConnection))
-						natSupport := support.NatsSupportConstruct(natsBrokerCon)
-						brokerConnectionSupport.RegisterConnection(currentConnection["key"].(string), natSupport)
+						tryRestartProcess(5, func() bool {
+							natSupport, err := support.NatsSupportConstruct(natsBrokerCon)
+							if err != nil {
+								return true
+							}
+							brokerConnectionSupport.RegisterConnection(currentConnection["key"].(string), natSupport)
+							return false
+						})
 					case "rabbitmq":
 						amqpBrokerCon := configYamlSupport.GetRabbitMQBrokenCon(configYamlSupport.GetTypeBrokerCon(currentConnection))
-						amqpSupport := support.AMQPSupportConstruct(amqpBrokerCon)
-						brokerConnectionSupport.RegisterConnection(currentConnection["key"].(string), amqpSupport)
+						tryRestartProcess(5, func() bool {
+							amqpSupport, err := support.AMQPSupportConstruct(amqpBrokerCon)
+							if err != nil {
+								return true
+							}
+							brokerConnectionSupport.RegisterConnection(currentConnection["key"].(string), amqpSupport)
+							return false
+						})
 					}
 
 					supportSupport.Register(brokerConnectionSupport)

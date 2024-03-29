@@ -11,8 +11,10 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"runtime"
 	"strings"
+	"syscall"
 
 	"dario.cat/mergo"
 	"gopkg.in/yaml.v3"
@@ -159,19 +161,29 @@ func (c *ConfigYamlSupport) loadServerCOnfig() {
 	mergo.Merge(&c.ConfigData, bodyData.Return)
 }
 
-func (c *ConfigYamlSupport) DownloadNewApp() error {
+func (c *ConfigYamlSupport) DownloadNewApp(versionNumber int) error {
+
 	url := c.ConfigData.Job_item_link
 	outputPath := ""
 	os_type := runtime.GOOS
 	switch os_type {
 	case "windows":
-		outputPath = "job_item.exe"
+		outputPath = fmt.Sprint("job_item_", versionNumber, ".exe")
 	case "darwin":
-		outputPath = "job_item"
+		outputPath = fmt.Sprint("job_item_", versionNumber)
 	case "linux":
-		outputPath = "job_item"
+		outputPath = fmt.Sprint("job_item_", versionNumber)
 	}
 	c.child_process_app = &outputPath
+
+	c.replaceApp(outputPath)
+
+	// Check the file first is exist or not
+	_, err := os.Stat(outputPath)
+	if err == nil {
+		return nil
+	}
+
 	out, err := os.Create(outputPath)
 	if err != nil {
 		return err
@@ -205,6 +217,45 @@ func (c *ConfigYamlSupport) DownloadNewApp() error {
 	}
 
 	return nil
+}
+
+// This function for handle when user exit, create other process
+// To rename the new app to current app name
+func (c *ConfigYamlSupport) replaceApp(app_new string) {
+	go func() {
+		defer func() {
+			var cmd *exec.Cmd
+			os_type := runtime.GOOS
+			fmt.Println("Replace the current app to be new version")
+			switch os_type {
+			case "windows":
+				executablePath, _ := os.Executable()
+				cmd := exec.Command("cmd", "del "+executablePath+" && move "+app_new+" "+executablePath)
+				cmd.CombinedOutput()
+				err := cmd.Run()
+				if err != nil {
+					fmt.Println(err)
+				}
+			case "darwin", "linux":
+				executablePath, _ := os.Executable()
+				cmd = exec.Command("sh", "-c", "rm "+executablePath+" || true && mv "+app_new+" "+executablePath+" && exit")
+				cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+				err := cmd.Run()
+				if err != nil {
+					fmt.Println(err)
+				}
+			}
+		}()
+		// Create a channel to receive signals
+		sigCh := make(chan os.Signal, 1)
+
+		// Notify the sigCh channel for SIGINT and SIGTERM signals
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+		// Block until a signal is received
+		sig := <-sigCh
+		fmt.Printf("Received signal: %v\n", sig)
+	}()
 }
 
 func makeExecutable(path string) error {

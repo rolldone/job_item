@@ -14,12 +14,12 @@ type NatsConfInfo struct {
 	NATS_PORT int
 }
 
-func NatsSupportConstruct(props NatsBrokerConnection) *NatsSupport {
+func NatsSupportConstruct(props NatsBrokerConnection) (*NatsSupport, error) {
 	gg := NatsSupport{
 		natConfInfo: props,
 	}
-	gg.ConnectPubSub()
-	return &gg
+	err := gg.ConnectPubSub()
+	return &gg, err
 }
 
 type NatsSupport struct {
@@ -28,7 +28,7 @@ type NatsSupport struct {
 	key         string
 }
 
-func (c *NatsSupport) ConnectPubSub() (*nats.Conn, error) {
+func (c *NatsSupport) ConnectPubSub() error {
 	natsHost := c.natConfInfo.Host
 	natsPort := c.natConfInfo.Port
 	natsAuthType := c.natConfInfo.Auth_type
@@ -52,13 +52,11 @@ func (c *NatsSupport) ConnectPubSub() (*nats.Conn, error) {
 
 	if err != nil {
 		fmt.Println("Nats error :: ", err.Error())
-		log.Panic(err)
-		panic(1)
 	}
 
 	// Wanna tester add publish at below
 
-	return nc, err
+	return err
 }
 
 // Interface from BrokerConnectionInterface
