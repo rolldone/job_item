@@ -225,25 +225,13 @@ func (c *ConfigYamlSupport) replaceApp(app_new string) {
 	go func() {
 		defer func() {
 			var cmd *exec.Cmd
-			os_type := runtime.GOOS
+			// os_type := runtime.GOOS
 			fmt.Println("Replace the current app to be new version")
-			switch os_type {
-			case "windows":
-				executablePath, _ := os.Executable()
-				cmd := exec.Command("cmd", "del "+executablePath+" && move "+app_new+" "+executablePath)
-				cmd.CombinedOutput()
-				err := cmd.Run()
-				if err != nil {
-					fmt.Println(err)
-				}
-			case "darwin", "linux":
-				executablePath, _ := os.Executable()
-				cmd = exec.Command("sh", "-c", "rm "+executablePath+" || true && mv "+app_new+" "+executablePath+" && exit")
-				cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-				err := cmd.Run()
-				if err != nil {
-					fmt.Println(err)
-				}
+			executablePath, _ := os.Executable()
+			cmd = ReplaceApp(executablePath, app_new)
+			err := cmd.Run()
+			if err != nil {
+				fmt.Println(err)
 			}
 		}()
 		// Create a channel to receive signals
