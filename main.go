@@ -29,9 +29,21 @@ func main() {
 	}
 	supportSupport := support.SupportConstruct()
 
-	// brokerConnectionSupport := support.BrokerConnectionSupportContruct()
-	configYamlSupport := support.ConfigYamlSupportContruct()
-	supportSupport.Register(configYamlSupport)
+	// Retry post data to get authentication from server
+	var configYamlSupport *support.ConfigYamlSupport
+	retryRequest := true
+	for retryRequest {
+		confItem, err := support.ConfigYamlSupportContruct()
+		configYamlSupport = confItem
+		if err != nil {
+			retryRequest = true
+			time.Sleep(time.Duration(time.Second) * 5)
+			fmt.Println("Retry connection")
+			continue
+		}
+		retryRequest = false
+		supportSupport.Register(configYamlSupport)
+	}
 
 	is_develop, err := helper.IsDevelopment()
 	if err != nil {
@@ -181,8 +193,23 @@ func initCli() bool {
 					supportSupport := support.SupportConstruct()
 
 					brokerConnectionSupport := support.BrokerConnectionSupportContruct()
-					configYamlSupport := support.ConfigYamlSupportContruct()
-					supportSupport.Register(configYamlSupport)
+
+					// Retry post data to get authentication from server
+					var configYamlSupport *support.ConfigYamlSupport
+					retryRequest := true
+					for retryRequest {
+						_configYamlSupport, err := support.ConfigYamlSupportContruct()
+						configYamlSupport = _configYamlSupport
+						if err != nil {
+							retryRequest = true
+							time.Sleep(time.Duration(time.Second) * 5)
+							fmt.Println("Retry connection")
+							continue
+						}
+						retryRequest = false
+						supportSupport.Register(configYamlSupport)
+						break
+					}
 
 					eventBusSupport := support.EventBusConstruct()
 					supportSupport.Register(eventBusSupport)

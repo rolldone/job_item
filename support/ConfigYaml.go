@@ -83,11 +83,14 @@ type ConfigData struct {
 	Job_item_link           string `json:"job_item_link,omitempty"`
 }
 
-func ConfigYamlSupportContruct() *ConfigYamlSupport {
+func ConfigYamlSupportContruct() (*ConfigYamlSupport, error) {
 	gg := ConfigYamlSupport{}
 	gg.loadConfigYaml()
-	gg.loadServerCOnfig()
-	return &gg
+	err := gg.loadServerCOnfig()
+	if err != nil {
+		return nil, err
+	}
+	return &gg, nil
 }
 
 type ConfigYamlSupport struct {
@@ -112,7 +115,7 @@ func (c *ConfigYamlSupport) loadConfigYaml() {
 
 // Request the config to the server and get configuration.
 // Store to the ConfigData Variable.
-func (c *ConfigYamlSupport) loadServerCOnfig() {
+func (c *ConfigYamlSupport) loadServerCOnfig() error {
 	var param = map[string]interface{}{}
 	param["project_id"] = c.ConfigData.Credential.Project_id
 	param["secret_key"] = c.ConfigData.Credential.Secret_key
@@ -137,13 +140,14 @@ func (c *ConfigYamlSupport) loadServerCOnfig() {
 	// request.Header.Set("X-Custom-Header", "myvalue")
 	request.Header.Set("Content-Type", "application/json")
 	if err != nil {
-		fmt.Println("err :: ", err)
-		panic(1)
+		fmt.Println("err - http.NewRequest :: ", err)
+		return err
+		// panic(1)
 	}
 	response, err := client.Do(request)
 	if err != nil {
-		fmt.Println("err :: ", err)
-		panic(1)
+		fmt.Println("err - client.Do :: ", err)
+		return err
 	}
 	defer response.Body.Close()
 	bodyData := struct {
@@ -159,6 +163,7 @@ func (c *ConfigYamlSupport) loadServerCOnfig() {
 	c.ConfigData.Job_item_version_number = bodyData.Return.Job_item_version_number
 	c.ConfigData.Job_item_link = bodyData.Return.Job_item_link
 	mergo.Merge(&c.ConfigData, bodyData.Return)
+	return nil
 }
 
 func (c *ConfigYamlSupport) DownloadNewApp(versionNumber int) error {
