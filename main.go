@@ -20,29 +20,12 @@ const VERSION_NUMBER = 3
 const VERSION_APP = "v0.1.1"
 
 func main() {
-	argsWithoutProg := os.Args[1:]
-	if len(argsWithoutProg) > 0 {
-		bypass := initCli()
-		if !bypass {
-			return
-		}
-	}
-	supportSupport := support.SupportConstruct()
 
-	// Retry post data to get authentication from server
-	var configYamlSupport *support.ConfigYamlSupport
-	retryRequest := true
-	for retryRequest {
-		confItem, err := support.ConfigYamlSupportContruct()
-		configYamlSupport = confItem
-		if err != nil {
-			retryRequest = true
-			time.Sleep(time.Duration(time.Second) * 5)
-			fmt.Println("Retry connection")
-			continue
-		}
-		retryRequest = false
-		supportSupport.Register(configYamlSupport)
+	// Check the init cli first is with nested command or not
+	// argsWithoutProg := os.Args[1:]
+	bypass := initCli()
+	if !bypass {
+		return
 	}
 
 	is_develop, err := helper.IsDevelopment()
@@ -51,6 +34,7 @@ func main() {
 		panic(1)
 	}
 
+	configYamlSupport := support.Helper.ConfigYaml
 	if configYamlSupport.ConfigData.Job_item_version_number > VERSION_NUMBER {
 		// fmt.Println(configYamlSupport.ConfigData.Job_item_version_number, "::", VERSION_NUMBER)
 		fmt.Println("Download New Version :: ", configYamlSupport.ConfigData.Job_item_link)
@@ -178,15 +162,53 @@ func tryRestartProcess(waitingRecursive int, callback func() bool) {
 func initCli() bool {
 	var flag string
 
+	flagConfig := []cli.Flag{
+		&cli.StringFlag{
+			Name:    "config",
+			Aliases: []string{"c"},
+			Value:   "config.yaml",
+			Usage:   "configuration file",
+			EnvVars: []string{"CONFIG_PATH"},
+		},
+	}
+
 	app := &cli.App{
 		Name:                 "job_item",
 		EnableBashCompletion: false,
 		Suggest:              false,
 		HideHelp:             true,
 		HideHelpCommand:      true,
+		Flags:                flagConfig,
+
+		// This is without nested command
+		// Example job_item --config=/var/www/html/config.yaml
+		Action: func(ctx *cli.Context) error {
+			supportSupport := support.SupportConstruct()
+
+			// Retry post data to get authentication from server
+			var configYamlSupport *support.ConfigYamlSupport
+			retryRequest := true
+			for retryRequest {
+				confItem, err := support.ConfigYamlSupportContruct(ctx.String("config"))
+				configYamlSupport = confItem
+				if err != nil {
+					retryRequest = true
+					time.Sleep(time.Duration(time.Second) * 5)
+					fmt.Println("Retry connection")
+					continue
+				}
+				retryRequest = false
+				supportSupport.Register(configYamlSupport)
+			}
+			return nil
+		},
+
+		// This is with nested command
+		// Example job_item child_process --config=/var/www/html/config.yaml
 		Commands: []*cli.Command{
 			{
-				Name: "child_process",
+				Flags: flagConfig,
+				Name:  "child_process",
 				// Aliases: []string{"c"},
 				Usage: "options for config",
 				Action: func(ctx *cli.Context) error {
@@ -198,7 +220,7 @@ func initCli() bool {
 					var configYamlSupport *support.ConfigYamlSupport
 					retryRequest := true
 					for retryRequest {
-						_configYamlSupport, err := support.ConfigYamlSupportContruct()
+						_configYamlSupport, err := support.ConfigYamlSupportContruct(ctx.String("config"))
 						configYamlSupport = _configYamlSupport
 						if err != nil {
 							retryRequest = true
@@ -280,5 +302,7 @@ func initCli() bool {
 	if err := app.Run(os.Args); err != nil {
 		log.Fatal(err)
 	}
+
+	// It mean bypass
 	return flag == ""
 }

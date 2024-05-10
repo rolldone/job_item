@@ -83,8 +83,10 @@ type ConfigData struct {
 	Job_item_link           string `json:"job_item_link,omitempty"`
 }
 
-func ConfigYamlSupportContruct() (*ConfigYamlSupport, error) {
-	gg := ConfigYamlSupport{}
+func ConfigYamlSupportContruct(config_path string) (*ConfigYamlSupport, error) {
+	gg := ConfigYamlSupport{
+		Config_path: config_path,
+	}
 	gg.loadConfigYaml()
 	err := gg.loadServerCOnfig()
 	if err != nil {
@@ -96,12 +98,13 @@ func ConfigYamlSupportContruct() (*ConfigYamlSupport, error) {
 type ConfigYamlSupport struct {
 	ConfigData        ConfigData
 	child_process_app *string
+	Config_path       string
 }
 
 // Load the config from config.yaml.
 // Check it the config problem or not if problem force close.
 func (c *ConfigYamlSupport) loadConfigYaml() {
-	yamlFile, err := os.ReadFile("config.yaml")
+	yamlFile, err := os.ReadFile(c.Config_path)
 	if err != nil {
 		fmt.Println("Problem open file config.yaml ", err)
 		panic(1)
