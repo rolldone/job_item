@@ -278,13 +278,17 @@ func (c *ConfigYamlSupport) RunChildProcess() (*exec.Cmd, error) {
 	}
 	var cmd *exec.Cmd
 	os_type := runtime.GOOS
+	config_path := c.Config_path
+	if config_path == "config.yaml" {
+		config_path = ""
+	}
 	switch os_type {
 	case "windows":
-		cmd = exec.Command(executablePath, "child_process")
+		cmd = exec.Command(executablePath, "child_process", "--config", config_path)
 	case "darwin":
-		cmd = exec.Command(executablePath, "child_process")
+		cmd = exec.Command(executablePath, "child_process", "--config", config_path)
 	case "linux":
-		cmd = exec.Command(executablePath, "child_process")
+		cmd = exec.Command(executablePath, "child_process", "--config", config_path)
 	}
 
 	// cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: false}

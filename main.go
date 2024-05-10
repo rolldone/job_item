@@ -45,7 +45,7 @@ func main() {
 		}
 	} else {
 		if is_develop {
-			fmt.Println("Is Develope")
+			fmt.Println("Is Development")
 		}
 	}
 
@@ -68,7 +68,7 @@ func main() {
 		defer watcher.Close()
 
 		// Add a path.
-		err = watcher.Add("config.yaml")
+		err = watcher.Add(support.Helper.ConfigYaml.Config_path)
 		if err != nil {
 			log.Fatal(err)
 		}
