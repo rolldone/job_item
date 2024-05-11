@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"job_item/src/helper"
 	"job_item/support/model"
 	"log"
 	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
@@ -84,11 +86,31 @@ type ConfigData struct {
 }
 
 func ConfigYamlSupportContruct(config_path string) (*ConfigYamlSupport, error) {
+	fmt.Println("----------------------------------------------------------")
+	stat, err := os.Stat(filepath.Dir(config_path))
+	if err != nil {
+		fmt.Println("Error working dir :: ", err)
+		panic(1)
+	}
+	if stat.IsDir() {
+		fmt.Println("Set working dir :: ", filepath.Dir(config_path))
+	} else {
+		fmt.Println("Set working dir :: ", ".")
+	}
+	fmt.Println("----------------------------------------------------------")
+
+	err = os.Chdir(filepath.Dir(config_path))
+	if err != nil {
+		fmt.Println("Error chdir :: ", err)
+		panic(1)
+	}
+
 	gg := ConfigYamlSupport{
-		Config_path: config_path,
+		Config_path: filepath.Base(config_path),
 	}
 	gg.loadConfigYaml()
-	err := gg.loadServerCOnfig()
+	gg.useEnvToYamlValue()
+	err = gg.loadServerCOnfig()
 	if err != nil {
 		return nil, err
 	}
@@ -114,6 +136,10 @@ func (c *ConfigYamlSupport) loadConfigYaml() {
 	if err != nil {
 		log.Fatalf("Unmarshal: %v", err)
 	}
+}
+
+func (c *ConfigYamlSupport) useEnvToYamlValue() {
+	helper.Fromenv(&c.ConfigData)
 }
 
 // Request the config to the server and get configuration.
@@ -279,9 +305,11 @@ func (c *ConfigYamlSupport) RunChildProcess() (*exec.Cmd, error) {
 	var cmd *exec.Cmd
 	os_type := runtime.GOOS
 	config_path := c.Config_path
-	if config_path == "config.yaml" {
-		config_path = ""
+
+	if config_path == "" {
+		config_path = "config.yaml"
 	}
+
 	switch os_type {
 	case "windows":
 		cmd = exec.Command(executablePath, "child_process", "--config", config_path)
