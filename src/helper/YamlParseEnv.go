@@ -27,9 +27,13 @@ func _fromenv(rv reflect.Value) {
 			continue
 		}
 		if fv.Kind() == reflect.String {
+			oldMatch := fv.String()
 			match := reVar.FindStringSubmatch(fv.String())
 			if len(match) > 1 {
 				fv.SetString(os.Getenv(match[1]))
+				if fv.String() == "" {
+					fv.SetString(oldMatch)
+				}
 			}
 		}
 	}

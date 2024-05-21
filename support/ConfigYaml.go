@@ -165,7 +165,7 @@ func (c *ConfigYamlSupport) loadServerCOnfig() error {
 		panic(1)
 	}
 	var client = &http.Client{}
-	request, err := http.NewRequest("POST", c.ConfigData.End_point, bytes.NewBuffer(jsonDataParam))
+	request, err := http.NewRequest("POST", fmt.Sprint(c.ConfigData.End_point, "/api/worker/config"), bytes.NewBuffer(jsonDataParam))
 	// request.Header.Set("X-Custom-Header", "myvalue")
 	request.Header.Set("Content-Type", "application/json")
 	if err != nil {
