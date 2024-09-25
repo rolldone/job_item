@@ -24,9 +24,9 @@ func (c *DataBodyType) ToJSON() (string, error) {
 }
 
 type MessageJson struct {
-	Task_id string       `json:"task_id"`
-	Data    DataBodyType `json:"data"`
-	Action  string       `json:"action,omitempty"`
+	Task_id string      `json:"task_id"`
+	Data    interface{} `json:"data"`
+	Action  string      `json:"action,omitempty"`
 }
 
 func JobManagerEventConstruct() JobManagerEvent {
@@ -68,12 +68,27 @@ func (c *JobManagerEvent) ListenEvent(conn_name string) {
 					go func(message string) {
 						messageObject := MessageJson{}
 						json.Unmarshal([]byte(message), &messageObject)
-						dataString, _ := messageObject.Data.ToJSON()
+						dataString, _ := json.Marshal(messageObject.Data) // .Data.ToJSON()
 						f, _ := os.Create(fmt.Sprint(messageObject.Task_id, ".json"))
-						f.WriteString(dataString)
+						f.WriteString(string(dataString))
 						f.Close()
-						messageObject.Data["task_id"] = messageObject.Task_id
-						cmd := mustache.Render(jobConfig.Cmd, messageObject.Data)
+						// messageObject.Data["task_id"] = messageObject.Task_id
+						var cmd string
+						if _, ok := messageObject.Data.([]interface{}); ok {
+							cmd = mustache.Render(jobConfig.Cmd, map[string]string{"task_id": messageObject.Task_id})
+						} else {
+							var messageObjectParse map[string]string
+							// Marshal the interface to JSON
+							jsonData, err := json.Marshal(messageObject.Data)
+							if err != nil {
+								fmt.Println("Error marshaling interface to JSON:", err)
+								return
+							}
+							json.Unmarshal([]byte(jsonData), &messageObjectParse)
+							messageObjectParse["task_id"] = messageObject.Task_id
+							cmd = mustache.Render(jobConfig.Cmd, messageObjectParse)
+						}
+
 						jobManEvItem := JobManagerEventItem{
 							conn: c.conn,
 						}
