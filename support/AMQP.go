@@ -39,33 +39,86 @@ func (c *AMQPSupport) ConnectPubSub() (*amqp.Connection, error) {
 	amqpPort := c.amqpConfInfo.Port
 	amqpUser := c.amqpConfInfo.User
 	amqpPassword := c.amqpConfInfo.Password
-	// amqpExchange := c.amqpConfInfo.Exchange
 
-	// Connect to a server
-	// url := fmt.Sprint("amqp://" + amqpHost + ":" + strconv.Itoa(amqpPort))
 	// Create AMQP URI
 	url := "amqp://" + amqpUser + ":" + amqpPassword + "@" + amqpHost + ":" + strconv.Itoa(amqpPort) + "/"
-
 	fmt.Println("AMQP Connection inf :: ", url)
-	nc, err := amqp.Dial(url)
-	if err != nil {
-		fmt.Println("AMQP error :: ", err.Error())
-		log.Panic(err)
-		panic(1)
+
+	// Retry mechanism
+	var err error
+	for {
+		nc, connErr := amqp.Dial(url)
+		if connErr == nil {
+			c.nc = nc
+
+			// Set up connection monitoring
+			go func() {
+				notifyClose := nc.NotifyClose(make(chan *amqp.Error))
+				for err := range notifyClose {
+					if err != nil {
+						fmt.Println("Disconnected from AMQP server, attempting to reconnect:", err)
+						go c.retryConnection(url) // Trigger reconnection loop
+					}
+				}
+			}()
+
+			// Create a channel
+			ch, chErr := nc.Channel()
+			if chErr != nil {
+				fmt.Println("Failed to open a channel:", chErr)
+				return nil, chErr
+			}
+			c.ch = ch
+			break
+		}
+		fmt.Println("AMQP connection failed, retrying in 5-10 seconds:", connErr.Error())
+		time.Sleep(5 * time.Second) // Delay before retrying
+		err = connErr
 	}
 
-	// defer nc.Close()
+	return c.nc, err
+}
 
-	// Create a channel
-	ch, err := nc.Channel()
-	if err != nil {
-		log.Fatalf("Failed to open a channel: %v", err)
+func (c *AMQPSupport) retryConnection(url string) {
+	for {
+		// Check if already connected
+		if c.IsConnected() {
+			fmt.Println("Already connected to AMQP server, skipping reconnection")
+			return
+		}
+
+		// Attempt to reconnect
+		nc, connErr := amqp.Dial(url)
+		if connErr == nil {
+			c.nc = nc
+			fmt.Println("Successfully reconnected to AMQP server:", url)
+
+			// Recreate the channel
+			ch, chErr := nc.Channel()
+			if chErr != nil {
+				fmt.Println("Failed to reopen channel:", chErr)
+				go c.retryConnection(url) // Recursive retry on channel failure
+				return
+			}
+			c.ch = ch
+
+			// Set up connection monitoring
+			go func() {
+				notifyClose := nc.NotifyClose(make(chan *amqp.Error))
+				for err := range notifyClose {
+					if err != nil {
+						fmt.Println("Disconnected from AMQP server, attempting to reconnect:", err)
+						go c.retryConnection(url) // Recursive retry on disconnect
+					}
+				}
+			}()
+			break
+		}
+
+		// Log and retry after a delay
+		fmt.Println("Retrying AMQP connection in 5-10 seconds:", connErr.Error())
+		time.Sleep(5 * time.Second)
 	}
-	// defer ch.Close()
-
-	c.ch = ch
-	c.nc = nc
-	return nc, err
 }
 
 // Interface from SupportInterface
@@ -239,4 +292,12 @@ func (c *AMQPSupport) GetKey_P() string {
 // Interface from BrokerConnectionInterface
 func (c *AMQPSupport) GetBroker_P() any {
 	return c
+}
+
+// Interface from BrokerConnectionInterface
+func (c *AMQPSupport) IsConnected() bool {
+	if c.nc == nil || c.nc.IsClosed() {
+		return false
+	}
+	return true
 }

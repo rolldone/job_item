@@ -13,6 +13,7 @@ type BrokerConnectionInterface interface {
 	GetBroker_P() any
 	SetKey_P(key string)
 	GetKey_P() string
+	IsConnected() bool
 }
 
 func BrokerConnectionSupportContruct() *BrokerConnectionSupport {

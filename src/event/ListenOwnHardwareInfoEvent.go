@@ -65,6 +65,12 @@ func (c *ListenOwnHardwareInfoEvent) ListenInfoHardware(conn_name string) {
 
 	go func() {
 		for {
+			if !conn.IsConnected() {
+				log.Println("Connection is not active, skipping publish for ListenInfoHardware")
+				time.Sleep(c.GetDuration(FIVE_MINUTE))
+				continue
+			}
+
 			hostInfo, err := host.Info()
 			if err != nil {
 				log.Fatalln(err)
@@ -76,8 +82,6 @@ func (c *ListenOwnHardwareInfoEvent) ListenInfoHardware(conn_name string) {
 				log.Fatalln(err)
 				return
 			}
-
-			// fmt.Println(host.Info())
 
 			conn.Pub("listen_host_information", string(hostInfoJsonString))
 
@@ -91,6 +95,12 @@ func (c *ListenOwnHardwareInfoEvent) ListenInfoUsage(conn_name string) {
 
 	go func() {
 		for {
+			if !conn.IsConnected() {
+				log.Println("Connection is not active, skipping publish for ListenInfoUsage")
+				time.Sleep(c.GetDuration(ONE_MINUTE))
+				continue
+			}
+
 			hostInfo, err := host.Info()
 			if err != nil {
 				log.Fatalln(err)
@@ -116,8 +126,6 @@ func (c *ListenOwnHardwareInfoEvent) ListenInfoUsage(conn_name string) {
 				return
 			}
 
-			// fmt.Println("CPU :: ", string(pString))
-
 			conn.Pub("listen_cpu_information", string(pString))
 
 			v, err := mem.VirtualMemory()
@@ -139,8 +147,6 @@ func (c *ListenOwnHardwareInfoEvent) ListenInfoUsage(conn_name string) {
 				return
 			}
 
-			// fmt.Println("MEM :: ", string(vString))
-
 			conn.Pub("listen_mem_information", string(vString))
 
 			time.Sleep(c.GetDuration(ONE_MINUTE))
@@ -153,6 +159,12 @@ func (c *ListenOwnHardwareInfoEvent) ListenInfoNetwork(conn_name string) {
 
 	go func() {
 		for {
+			if !conn.IsConnected() {
+				log.Println("Connection is not active, skipping publish for ListenInfoNetwork")
+				time.Sleep(c.GetDuration(ONE_MINUTE))
+				continue
+			}
+
 			hostInfo, err := host.Info()
 			if err != nil {
 				log.Fatalln(err)
@@ -180,10 +192,7 @@ func (c *ListenOwnHardwareInfoEvent) ListenInfoNetwork(conn_name string) {
 
 			conn.Pub("listen_net_information", string(netInterfaceString))
 
-			// fmt.Println(string(netInterfaceString))
-
 			time.Sleep(c.GetDuration(ONE_MINUTE))
-
 		}
 	}()
 }
