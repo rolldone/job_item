@@ -34,6 +34,10 @@ type AMQPSupport struct {
 	key          string
 }
 
+func (c *AMQPSupport) GetRefreshPubSub() string {
+	return BROKER_REFRESH_PUBSUB
+}
+
 func (c *AMQPSupport) ConnectPubSub() (*amqp.Connection, error) {
 	amqpHost := c.amqpConfInfo.Host
 	amqpPort := c.amqpConfInfo.Port
@@ -106,6 +110,9 @@ func (c *AMQPSupport) retryConnection(url string) {
 					}
 				}
 			}()
+
+			// Publish an event to refresh pubsub
+			Helper.EventBus.GetBus().Publish("refresh_pubsub", nil)
 			break
 		}
 

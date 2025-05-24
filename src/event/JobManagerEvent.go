@@ -49,66 +49,74 @@ type ActionMap struct {
 
 func (c *JobManagerEvent) ListenEvent(conn_name string) {
 	// Then get the data connection by connection key
-	conn := support.Helper.BrokerConnection.GetConnection(conn_name)
-	c.conn = conn
-	project_app_uuid := support.Helper.ConfigYaml.ConfigData.Uuid
-	job_datas := support.Helper.ConfigYaml.ConfigData.Project.Job_datas
-	jobs := support.Helper.ConfigYaml.ConfigData.Jobs
-	unsubcribes := []func(){}
-	for _, v := range jobs {
-		jobConfig := v
-		isMatch := false
-		for _, x := range job_datas {
-			if x.Event == v.Event {
-				isMatch = true
-				// var unsubcribe func()
-				sub_key := fmt.Sprint(project_app_uuid, ".", v.Event)
-				unsub, err := conn.Sub(sub_key, project_app_uuid, func(message string) {
-					// fmt.Println(sub_key, " :: ", message)
-					go func(message string) {
-						messageObject := MessageJson{}
-						json.Unmarshal([]byte(message), &messageObject)
-						dataString, _ := json.Marshal(messageObject.Data) // .Data.ToJSON()
-						f, _ := os.Create(fmt.Sprint(messageObject.Task_id, ".json"))
-						f.WriteString(string(dataString))
-						f.Close()
-						// messageObject.Data["task_id"] = messageObject.Task_id
-						var cmd string
-						if _, ok := messageObject.Data.([]interface{}); ok {
-							cmd = mustache.Render(jobConfig.Cmd, map[string]string{"task_id": messageObject.Task_id})
-						} else {
-							var messageObjectParse map[string]string
-							// Marshal the interface to JSON
-							jsonData, err := json.Marshal(messageObject.Data)
-							if err != nil {
-								fmt.Println("Error marshaling interface to JSON:", err)
-								return
+	var initPubSubChannel = func() {
+		conn := support.Helper.BrokerConnection.GetConnection(conn_name)
+		c.conn = conn
+		project_app_uuid := support.Helper.ConfigYaml.ConfigData.Uuid
+		job_datas := support.Helper.ConfigYaml.ConfigData.Project.Job_datas
+		jobs := support.Helper.ConfigYaml.ConfigData.Jobs
+		unsubcribes := []func(){}
+		for _, v := range jobs {
+			jobConfig := v
+			isMatch := false
+			for _, x := range job_datas {
+				if x.Event == v.Event {
+					isMatch = true
+					// var unsubcribe func()
+					sub_key := fmt.Sprint(project_app_uuid, ".", v.Event)
+					unsub, err := conn.Sub(sub_key, project_app_uuid, func(message string) {
+						// fmt.Println(sub_key, " :: ", message)
+						go func(message string) {
+							messageObject := MessageJson{}
+							json.Unmarshal([]byte(message), &messageObject)
+							dataString, _ := json.Marshal(messageObject.Data) // .Data.ToJSON()
+							f, _ := os.Create(fmt.Sprint(messageObject.Task_id, ".json"))
+							f.WriteString(string(dataString))
+							f.Close()
+							// messageObject.Data["task_id"] = messageObject.Task_id
+							var cmd string
+							if _, ok := messageObject.Data.([]interface{}); ok {
+								cmd = mustache.Render(jobConfig.Cmd, map[string]string{"task_id": messageObject.Task_id})
+							} else {
+								var messageObjectParse map[string]string
+								// Marshal the interface to JSON
+								jsonData, err := json.Marshal(messageObject.Data)
+								if err != nil {
+									fmt.Println("Error marshaling interface to JSON:", err)
+									return
+								}
+								json.Unmarshal([]byte(jsonData), &messageObjectParse)
+								messageObjectParse["task_id"] = messageObject.Task_id
+								cmd = mustache.Render(jobConfig.Cmd, messageObjectParse)
 							}
-							json.Unmarshal([]byte(jsonData), &messageObjectParse)
-							messageObjectParse["task_id"] = messageObject.Task_id
-							cmd = mustache.Render(jobConfig.Cmd, messageObjectParse)
-						}
 
-						jobManEvItem := JobManagerEventItem{
-							conn: c.conn,
-						}
-						go jobManEvItem.RunGoroutine(cmd, messageObject.Task_id)
-					}(message)
-				})
+							jobManEvItem := JobManagerEventItem{
+								conn: c.conn,
+							}
+							go jobManEvItem.RunGoroutine(cmd, messageObject.Task_id)
+						}(message)
+					})
 
-				_ = append(unsubcribes, unsub)
+					_ = append(unsubcribes, unsub)
 
-				if err != nil {
-					log.Println(err)
+					if err != nil {
+						log.Println(err)
+						break
+					}
 					break
 				}
-				break
+			}
+			if !isMatch {
+				fmt.Println("Event :", v.Event, " not register yet. Please check on job manager with app project that you register it.")
 			}
 		}
-		if !isMatch {
-			fmt.Println("Event :", v.Event, " not register yet. Please check on job manager with app project that you register it.")
-		}
 	}
+	initPubSubChannel()
+	// Subscribe to a custom event (replace "custom_event" and handler as needed)
+	support.Helper.EventBus.GetBus().Subscribe(c.conn.GetRefreshPubSub(), func(data interface{}) {
+		fmt.Println("Received custom_event with data:", data)
+		initPubSubChannel()
+	})
 }
 
 type JobManagerEventItem struct {

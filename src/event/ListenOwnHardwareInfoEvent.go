@@ -62,10 +62,15 @@ func (c *ListenOwnHardwareInfoEvent) GetDuration(time_duration string) time.Dura
 
 func (c *ListenOwnHardwareInfoEvent) ListenInfoHardware(conn_name string) {
 	conn := support.Helper.BrokerConnection.GetConnection(conn_name)
+	// Subscribe to refresh_pubsub event to re-init conn
+	support.Helper.EventBus.GetBus().Subscribe(conn.GetRefreshPubSub(), func(data interface{}) {
+		conn = support.Helper.BrokerConnection.GetConnection(conn_name)
+		log.Println("[ListenOwnHardwareInfoEvent] Refreshed pubsub connection for:", conn_name)
+	})
 
 	go func() {
 		for {
-			if !conn.IsConnected() {
+			if !(conn).IsConnected() {
 				log.Println("Connection is not active, skipping publish for ListenInfoHardware")
 				time.Sleep(c.GetDuration(FIVE_MINUTE))
 				continue
@@ -92,6 +97,11 @@ func (c *ListenOwnHardwareInfoEvent) ListenInfoHardware(conn_name string) {
 
 func (c *ListenOwnHardwareInfoEvent) ListenInfoUsage(conn_name string) {
 	conn := support.Helper.BrokerConnection.GetConnection(conn_name)
+	// Subscribe to refresh_pubsub event to re-init conn
+	support.Helper.EventBus.GetBus().Subscribe(conn.GetRefreshPubSub(), func(data interface{}) {
+		conn = support.Helper.BrokerConnection.GetConnection(conn_name)
+		log.Println("[ListenOwnHardwareInfoEvent] Refreshed pubsub connection for:", conn_name)
+	})
 
 	go func() {
 		for {
@@ -156,6 +166,11 @@ func (c *ListenOwnHardwareInfoEvent) ListenInfoUsage(conn_name string) {
 
 func (c *ListenOwnHardwareInfoEvent) ListenInfoNetwork(conn_name string) {
 	conn := support.Helper.BrokerConnection.GetConnection(conn_name)
+	// Subscribe to refresh_pubsub event to re-init conn
+	support.Helper.EventBus.GetBus().Subscribe(conn.GetRefreshPubSub(), func(data interface{}) {
+		conn = support.Helper.BrokerConnection.GetConnection(conn_name)
+		log.Println("[ListenOwnHardwareInfoEvent] Refreshed pubsub connection for:", conn_name)
+	})
 
 	go func() {
 		for {

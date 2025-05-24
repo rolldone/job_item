@@ -252,7 +252,8 @@ func initCli() bool {
 							if err != nil {
 								return true
 							}
-							brokerConnectionSupport.RegisterConnection(currentConnection["key"].(string), natSupport)
+							var gg *support.NatsSupport = &natSupport
+							brokerConnectionSupport.RegisterConnection(currentConnection["key"].(string), gg)
 							return false
 						})
 					case "rabbitmq":
@@ -262,7 +263,8 @@ func initCli() bool {
 							if err != nil {
 								return true
 							}
-							brokerConnectionSupport.RegisterConnection(currentConnection["key"].(string), amqpSupport)
+							var gg *support.AMQPSupport = amqpSupport
+							brokerConnectionSupport.RegisterConnection(currentConnection["key"].(string), gg)
 							return false
 						})
 					}

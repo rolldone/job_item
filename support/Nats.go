@@ -14,12 +14,16 @@ type NatsConfInfo struct {
 	NATS_PORT int
 }
 
-func NatsSupportConstruct(props NatsBrokerConnection) (*NatsSupport, error) {
+func NatsSupportConstruct(props NatsBrokerConnection) (NatsSupport, error) {
 	gg := NatsSupport{
 		natConfInfo: props,
 	}
 	err := gg.ConnectPubSub()
-	return &gg, err
+	return gg, err
+}
+
+func (c *NatsSupport) GetRefreshPubSub() string {
+	return BROKER_REFRESH_PUBSUB
 }
 
 type NatsSupport struct {

@@ -6,6 +6,8 @@ type SubSyncOpts struct {
 	Timeout int
 }
 
+var BROKER_REFRESH_PUBSUB = "refresh_pubsub"
+
 type BrokerConnectionInterface interface {
 	Pub(topic string, msg string)
 	Sub(uuidItem string, group string, callback func(message string)) (func(), error)
@@ -14,29 +16,30 @@ type BrokerConnectionInterface interface {
 	SetKey_P(key string)
 	GetKey_P() string
 	IsConnected() bool
+	GetRefreshPubSub() string
 }
 
 func BrokerConnectionSupportContruct() *BrokerConnectionSupport {
 	ii := &BrokerConnectionSupport{
-		conn_arr: make([]BrokerConnectionInterface, 0),
+		conn_arr: make([]*BrokerConnectionInterface, 0),
 	}
 	return ii
 }
 
 type BrokerConnectionSupport struct {
-	conn_arr []BrokerConnectionInterface
+	conn_arr []*BrokerConnectionInterface
 }
 
 func (c *BrokerConnectionSupport) RegisterConnection(key string, conn BrokerConnectionInterface) {
-	conn.SetKey_P(key)
-	c.conn_arr = append(c.conn_arr, conn)
+	(conn).SetKey_P(key)
+	c.conn_arr = append(c.conn_arr, &conn)
 }
 
 func (c *BrokerConnectionSupport) GetConnection(key string) BrokerConnectionInterface {
 	for _, v := range c.conn_arr {
-		if v.GetKey_P() == key {
-			fmt.Println("GetConnection :: ", v.GetKey_P(), " == ", key)
-			return v.GetBroker_P().(BrokerConnectionInterface)
+		if (*v).GetKey_P() == key {
+			fmt.Println("GetConnection :: ", (*v).GetKey_P(), " == ", key)
+			return (*v).GetBroker_P().(BrokerConnectionInterface)
 		}
 	}
 	return nil
