@@ -52,58 +52,31 @@ func (c *NatsSupport) ConnectPubSub() error {
 	var err error
 	for {
 		nc, connErr := nats.Connect(url,
+			nats.MaxReconnects(-1),
+			nats.ReconnectWait(5*time.Second),
 			nats.ReconnectHandler(func(nc *nats.Conn) {
 				fmt.Println("Reconnected to NATS server:", nc.ConnectedUrl())
 			}),
 			nats.DisconnectHandler(func(nc *nats.Conn) {
 				fmt.Println("Disconnected from NATS server, attempting to reconnect...")
-				go c.retryConnection(url) // Trigger reconnection loop
 			}),
 			nats.ClosedHandler(func(nc *nats.Conn) {
 				fmt.Println("Connection to NATS server closed, attempting to reconnect...")
-				go c.retryConnection(url) // Trigger reconnection loop
 			}),
 		)
 		if connErr == nil {
 			c.nc = nc
+			err = connErr
 			break
 		}
 		fmt.Println("Nats connection failed, retrying in 5-10 seconds:", connErr.Error())
 		time.Sleep(5 * time.Second) // Delay before retrying
 		err = connErr
 	}
-
+	fmt.Println("Successfully reconnected to NATS server - main")
 	// Wanna tester add publish at below
 
 	return err
-}
-
-func (c *NatsSupport) retryConnection(url string) {
-	for {
-		// Attempt to reconnect
-		nc, connErr := nats.Connect(url,
-			nats.ReconnectHandler(func(nc *nats.Conn) {
-				fmt.Println("Reconnected to NATS server:", nc.ConnectedUrl())
-			}),
-			nats.DisconnectHandler(func(nc *nats.Conn) {
-				fmt.Println("Disconnected from NATS server, attempting to reconnect...")
-				go c.retryConnection(url) // Recursive retry on disconnect
-			}),
-			nats.ClosedHandler(func(nc *nats.Conn) {
-				fmt.Println("Connection to NATS server closed, attempting to reconnect...")
-				go c.retryConnection(url) // Recursive retry on close
-			}),
-		)
-		if connErr == nil {
-			c.nc = nc
-			fmt.Println("Successfully reconnected to NATS server")
-			break
-		}
-
-		// Log and retry after a delay
-		fmt.Println("Retrying NATS connection in 5-10 seconds:", connErr.Error())
-		time.Sleep(5 * time.Second)
-	}
 }
 
 // Interface from BrokerConnectionInterface
