@@ -81,12 +81,6 @@ func (c *AMQPSupport) ConnectPubSub() (*amqp.Connection, error) {
 
 func (c *AMQPSupport) retryConnection(url string) {
 	for {
-		// Check if already connected
-		if c.IsConnected() {
-			fmt.Println("Already connected to AMQP server, skipping reconnection")
-			return
-		}
-
 		// Attempt to reconnect
 		nc, connErr := amqp.Dial(url)
 		if connErr == nil {

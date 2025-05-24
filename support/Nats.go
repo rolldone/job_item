@@ -80,12 +80,6 @@ func (c *NatsSupport) ConnectPubSub() error {
 
 func (c *NatsSupport) retryConnection(url string) {
 	for {
-		// Check if already connected
-		if c.IsConnected() {
-			fmt.Println("Already connected to NATS server, skipping reconnection")
-			return
-		}
-
 		// Attempt to reconnect
 		nc, connErr := nats.Connect(url,
 			nats.ReconnectHandler(func(nc *nats.Conn) {
