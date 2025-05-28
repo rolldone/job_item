@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/hoisie/mustache"
+	"github.com/shirou/gopsutil/v3/host"
 )
 
 type DataBodyType map[string]interface{}
@@ -74,6 +75,15 @@ func (c *JobManagerEvent) ListenEvent(conn_name string) {
 							f.WriteString(string(dataString))
 							f.Close()
 							// messageObject.Data["task_id"] = messageObject.Task_id
+
+							// Tell the job manager who is running this task
+							hostInfo, err := host.Info()
+							if err != nil {
+								log.Fatalln(err)
+								return
+							}
+							conn.Pub(messageObject.Task_id+"_who", hostInfo.HostID)
+
 							var cmd string
 							if _, ok := messageObject.Data.([]interface{}); ok {
 								cmd = mustache.Render(jobConfig.Cmd, map[string]string{"task_id": messageObject.Task_id})
