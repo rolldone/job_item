@@ -1,6 +1,8 @@
 module job_item
 
-go 1.21.6
+go 1.23.0
+
+toolchain go1.23.9
 
 require github.com/asaskevich/EventBus v0.0.0-20200907212545-49d423059eef
 
@@ -16,8 +18,8 @@ require (
 	github.com/tklauser/numcpus v0.6.1 // indirect
 	github.com/xrash/smetrics v0.0.0-20201216005158-039620a65673 // indirect
 	github.com/yusufpapurcu/wmi v1.2.3 // indirect
-	golang.org/x/crypto v0.18.0 // indirect
-	golang.org/x/sys v0.16.0 // indirect
+	golang.org/x/crypto v0.38.0 // indirect
+	golang.org/x/sys v0.33.0 // indirect
 )
 
 require (
