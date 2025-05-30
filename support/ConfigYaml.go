@@ -149,8 +149,8 @@ func (c *ConfigYamlSupport) loadServerCOnfig() error {
 	param["project_id"] = c.ConfigData.Credential.Project_id
 	param["secret_key"] = c.ConfigData.Credential.Secret_key
 
-	os := runtime.GOOS
-	param["os"] = os               // windows | darwin | linux
+	osType := runtime.GOOS
+	param["os"] = osType           // windows | darwin | linux
 	param["arch"] = runtime.GOARCH //  386, amd64, arm, s390x
 
 	hostInfo, err := Helper.HardwareInfo.GetInfoHardware()
@@ -179,6 +179,24 @@ func (c *ConfigYamlSupport) loadServerCOnfig() error {
 		return err
 	}
 	defer response.Body.Close()
+	bodyBytes, err := io.ReadAll(response.Body)
+	if err != nil {
+		fmt.Println("err :: ", err)
+		panic(1)
+	}
+
+	// Check for status_code 400 and handle error response
+	var rawResponse map[string]interface{}
+	if err := json.Unmarshal(bodyBytes, &rawResponse); err == nil {
+		if code, ok := rawResponse["status_code"]; ok {
+			if intCode, ok := code.(float64); ok && intCode == 400 {
+				fmt.Println("Error from server:", rawResponse["return"])
+				os.Exit(1)
+			}
+		}
+	}
+
+	response.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 	bodyData := struct {
 		Return ConfigData
 	}{}

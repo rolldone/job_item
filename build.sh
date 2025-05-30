@@ -39,4 +39,10 @@ esac
 
 echo "Building for $GOOS/$GOARCH..."
 
-CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH GO111MODULE=on go build -o main_$GOOS_$GOARCH main.go
+# Set output file extension for Windows
+OUTPUT="main_$GOOS_$GOARCH"
+if [ "$GOOS" = "windows" ]; then
+    OUTPUT="main_$GOOS_$GOARCH.exe"
+fi
+
+CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH GO111MODULE=on go build -o "$OUTPUT" main.go
