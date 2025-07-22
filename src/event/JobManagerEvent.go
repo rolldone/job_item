@@ -39,6 +39,48 @@ type JobManagerEvent struct {
 	conn support.BrokerConnectionInterface
 }
 
+// Helper function to subscribe and process job events
+func subscribeAndRunJobEvent(conn support.BrokerConnectionInterface, sub_key string, template string, project_app_uuid string, c *JobManagerEvent) (func(), error) {
+	unsub, err := conn.Sub(sub_key, project_app_uuid, func(message string) {
+		go func(message string) {
+			messageObject := MessageJson{}
+			json.Unmarshal([]byte(message), &messageObject)
+			dataString, _ := json.Marshal(messageObject.Data)
+			f, _ := os.Create(fmt.Sprint(messageObject.Task_id, ".json"))
+			f.WriteString(string(dataString))
+			f.Close()
+
+			hostInfo, err := host.Info()
+			if err != nil {
+				log.Fatalln(err)
+				return
+			}
+			conn.Pub(messageObject.Task_id+"_who", hostInfo.HostID)
+
+			var cmd string
+			if _, ok := messageObject.Data.([]interface{}); ok {
+				cmd = mustache.Render(template, map[string]string{"task_id": messageObject.Task_id})
+			} else {
+				var messageObjectParse map[string]string
+				jsonData, err := json.Marshal(messageObject.Data)
+				if err != nil {
+					fmt.Println("Error marshaling interface to JSON:", err)
+					return
+				}
+				json.Unmarshal([]byte(jsonData), &messageObjectParse)
+				messageObjectParse["task_id"] = messageObject.Task_id
+				cmd = mustache.Render(template, messageObjectParse)
+			}
+
+			jobManEvItem := JobManagerEventItem{
+				conn: c.conn,
+			}
+			go jobManEvItem.RunGoroutine(cmd, messageObject.Task_id)
+		}(message)
+	})
+	return unsub, err
+}
+
 const (
 	START     = 1
 	TERMINATE = 2
@@ -57,63 +99,35 @@ func (c *JobManagerEvent) ListenEvent(conn_name string) {
 		job_datas := support.Helper.ConfigYaml.ConfigData.Project.Job_datas
 		jobs := support.Helper.ConfigYaml.ConfigData.Jobs
 		unsubcribes := []func(){}
+		// Merged logic: for each job, check both top-level and nested job events
 		for _, v := range jobs {
 			jobConfig := v
 			isMatch := false
 			for _, x := range job_datas {
+				// Check top-level event
 				if x.Event == v.Event {
 					isMatch = true
-					// var unsubcribe func()
 					sub_key := fmt.Sprint(project_app_uuid, ".", v.Event)
-					unsub, err := conn.Sub(sub_key, project_app_uuid, func(message string) {
-						// fmt.Println(sub_key, " :: ", message)
-						go func(message string) {
-							messageObject := MessageJson{}
-							json.Unmarshal([]byte(message), &messageObject)
-							dataString, _ := json.Marshal(messageObject.Data) // .Data.ToJSON()
-							f, _ := os.Create(fmt.Sprint(messageObject.Task_id, ".json"))
-							f.WriteString(string(dataString))
-							f.Close()
-							// messageObject.Data["task_id"] = messageObject.Task_id
-
-							// Tell the job manager who is running this task
-							hostInfo, err := host.Info()
-							if err != nil {
-								log.Fatalln(err)
-								return
-							}
-							conn.Pub(messageObject.Task_id+"_who", hostInfo.HostID)
-
-							var cmd string
-							if _, ok := messageObject.Data.([]interface{}); ok {
-								cmd = mustache.Render(jobConfig.Cmd, map[string]string{"task_id": messageObject.Task_id})
-							} else {
-								var messageObjectParse map[string]string
-								// Marshal the interface to JSON
-								jsonData, err := json.Marshal(messageObject.Data)
-								if err != nil {
-									fmt.Println("Error marshaling interface to JSON:", err)
-									return
-								}
-								json.Unmarshal([]byte(jsonData), &messageObjectParse)
-								messageObjectParse["task_id"] = messageObject.Task_id
-								cmd = mustache.Render(jobConfig.Cmd, messageObjectParse)
-							}
-
-							jobManEvItem := JobManagerEventItem{
-								conn: c.conn,
-							}
-							go jobManEvItem.RunGoroutine(cmd, messageObject.Task_id)
-						}(message)
-					})
-
+					unsub, err := subscribeAndRunJobEvent(conn, sub_key, jobConfig.Cmd, project_app_uuid, c)
 					_ = append(unsubcribes, unsub)
-
 					if err != nil {
 						log.Println(err)
-						break
 					}
-					break
+				}
+				// Check nested events
+				if x.Nested_jobs != nil {
+					for _, nested := range *x.Nested_jobs {
+						nestedEvent := fmt.Sprint(x.Event, ".", nested.Event)
+						if nestedEvent == v.Event {
+							isMatch = true
+							sub_key := fmt.Sprint(project_app_uuid, ".", nestedEvent)
+							unsub, err := subscribeAndRunJobEvent(conn, sub_key, jobConfig.Cmd, project_app_uuid, c)
+							_ = append(unsubcribes, unsub)
+							if err != nil {
+								log.Println(err)
+							}
+						}
+					}
 				}
 			}
 			if !isMatch {
@@ -152,9 +166,20 @@ func (c *JobManagerEventItem) RunGoroutine(command string, task_id string) {
 		log.Println("RunGoroutine :: err :: 23940239409 :: ", err)
 	}
 
+	unsubListen, err := c.conn.Sub(fmt.Sprint(task_id, "_", "listen"), project_app_uuid, func(message string) {
+		// fmt.Println(sub_key, " :: ", message)
+		fmt.Println("message pubsub :: ", message)
+		time.Sleep(1 * time.Second)
+		c.conn.Pub(fmt.Sprint(task_id, "_", "listen")+".callback", "world")
+	})
+	if err != nil {
+		log.Println("RunGoroutine :: err :: 23940239407 :: ", err)
+	}
+
 	c.Last_status = GetStatus().STATUS_FINISH
 	defer func(last_status *string) {
 		unsub()
+		unsubListen()
 		fmt.Println("Closed goroutine")
 		time.Sleep(time.Duration(time.Second) * 3)
 		c.conn.Pub(fmt.Sprint(task_id, "_", "finish"), *last_status)

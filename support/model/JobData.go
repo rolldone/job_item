@@ -28,15 +28,16 @@ func (d *JobData_Data) Scan(value interface{}) error {
 }
 
 type JobData struct {
-	Id         int64                   `json:"id"`
-	Uuid       string                  `json:"uuid"`
-	Event      string                  `json:"event"`
-	Name       string                  `json:"name"`
-	Data       *JobData_Data           `json:"data,omitempty"`
-	Data_store *map[string]interface{} `json:"data_store"`
-	Created_at time.Time               `json:"created_at"`
-	Updated_at time.Time               `json:"updated_at"`
-	Deleted_at *time.Time              `json:"deleted_at,omitempty"`
+	Id          int64                   `json:"id"`
+	Uuid        string                  `json:"uuid"`
+	Event       string                  `json:"event"`
+	Name        string                  `json:"name"`
+	Data        *JobData_Data           `json:"data,omitempty"`
+	Data_store  *map[string]interface{} `json:"data_store"`
+	Created_at  time.Time               `json:"created_at"`
+	Updated_at  time.Time               `json:"updated_at"`
+	Deleted_at  *time.Time              `json:"deleted_at,omitempty"`
+	Nested_jobs *[]NestedJob            `json:"nested_jobs,omitempty"`
 
 	// This is simple relation has many.
 	// Project_datas []JobDataProject `gorm:"foreignKey:job_data_uuid;References:uuid" json:"project_datas,omitempty"`
