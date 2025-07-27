@@ -185,13 +185,23 @@ func (c *JobManagerEventItem) RunGoroutine(command string, task_id string) {
 		c.conn.Pub(fmt.Sprint(task_id, "_", "finish"), *last_status)
 	}(&c.Last_status)
 
+	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
-		cmd := exec.Command("cmd", "/K", command)
-		c.WatchProcessCMD(cmd, task_id)
+		cmd = exec.Command("cmd", "/K", command)
 	} else {
-		cmd := exec.Command("bash", "-c", command)
-		c.WatchProcessCMD(cmd, task_id)
+		cmd = exec.Command("bash", "-c", command)
 	}
+	envInvolve := append(os.Environ(),
+		"JOB_MANAGER_HOST="+support.Helper.ConfigYaml.ConfigData.End_point,
+		"JOB_MANAGER_RESULT_URL="+support.Helper.ConfigYaml.ConfigData.End_point+"/api/worker/job_record/result/"+task_id,
+		"JOB_MANAGER_UPLOAD_FILE="+support.Helper.ConfigYaml.ConfigData.End_point+"/api/worker/job_record/file/"+task_id,
+		"JOB_ITEM_TASK_ID="+task_id,
+		"JOB_ITEM_PROJECT_ID="+support.Helper.ConfigYaml.ConfigData.Credential.Project_id,
+		"JOB_ITEM_PROJECT_KEY="+support.Helper.ConfigYaml.ConfigData.Credential.Secret_key,
+		// "JOB_ITEM_MSG_NOTIF_HOST=http://localhost:"+strconv.Itoa(support.Helper.Gin.Port)+"/msg/notif",
+	)
+	cmd.Env = envInvolve
+	c.WatchProcessCMD(cmd, task_id)
 
 }
 
