@@ -110,7 +110,7 @@ func (c *NatsSupport) SubSync(uuidItem string, group_id string, callback func(me
 		return err
 	}
 	messageCount := 0
-	maxMessages := opts.Timeout // Maximum number of timeout process
+	maxMessages := opts.Timeout_second // Maximum number of timeout process
 	for messageCount < maxMessages {
 		// Wait for a message
 		msg, err := unsubribce.NextMsg(1 * time.Second) // Timeout after 5 seconds if no message

@@ -53,6 +53,20 @@ func (c AMQP_BrokerConnection) GetConnection() any {
 	return c
 }
 
+type RedisBrokerConnection struct {
+	Name     string `yaml:"name"`
+	Key      string `yaml:"key"`
+	Type     string `yaml:"type"`
+	Host     string `yaml:"host"`
+	Port     int    `yaml:"port"`
+	Password string `yaml:"password"`
+	Db       int    `yaml:"db"`
+}
+
+func (c RedisBrokerConnection) GetConnection() any {
+	return c
+}
+
 type BrokerConInterface interface {
 	GetConnection() any
 }
@@ -72,7 +86,6 @@ type Credential struct {
 }
 
 type ConfigData struct {
-	// Local
 	End_point  string     `yaml:"end_point"`
 	Credential Credential `yaml:"credential"`
 	// Import
@@ -386,7 +399,28 @@ func (c *ConfigYamlSupport) GetTypeBrokerCon(v map[string]interface{}) BrokerCon
 		rabbitmqConf.User = v["user"].(string)
 		rabbitmqConf.Password = v["password"].(string)
 		return rabbitmqConf
+	case "redis":
+		redisConf := RedisBrokerConnection{}
+		redisConf.Host = v["host"].(string)
+		redisConf.Key = v["key"].(string)
+		redisConf.Name = v["name"].(string)
+		redisConf.Port = int(v["port"].(float64))
+		redisConf.Type = v["type"].(string)
+		if v["password"] != nil {
+			redisConf.Password = v["password"].(string)
+		} else {
+			fmt.Println("REDIS ERR : You need define password")
+			panic(1)
+		}
+		if v["db"] != nil {
+			redisConf.Db = int(v["db"].(float64))
+		} else {
+			fmt.Println("REDIS ERR : You need define db")
+			panic(1)
+		}
+		return redisConf
 	}
+
 	return nil
 }
 
@@ -401,5 +435,10 @@ func (c ConfigYamlSupport) GetNatsBrokerCon(gg BrokerConInterface) NatsBrokerCon
 
 func (c ConfigYamlSupport) GetRabbitMQBrokenCon(gg BrokerConInterface) AMQP_BrokerConnection {
 	kk := gg.GetConnection().(AMQP_BrokerConnection)
+	return kk
+}
+
+func (c ConfigYamlSupport) GetRedisBrokerCon(gg BrokerConInterface) RedisBrokerConnection {
+	kk := gg.GetConnection().(RedisBrokerConnection)
 	return kk
 }

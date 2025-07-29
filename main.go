@@ -267,6 +267,17 @@ func initCli() bool {
 							brokerConnectionSupport.RegisterConnection(currentConnection["key"].(string), gg)
 							return false
 						})
+					case "redis":
+						redisBrokerCon := configYamlSupport.GetRedisBrokerCon(configYamlSupport.GetTypeBrokerCon(currentConnection))
+						tryRestartProcess(5, func() bool {
+							redisSupport, err := support.NewRedisSupportConstruct(redisBrokerCon)
+							if err != nil {
+								return true
+							}
+							var gg *support.RedisSupport = redisSupport
+							brokerConnectionSupport.RegisterConnection(currentConnection["key"].(string), gg)
+							return false
+						})
 					}
 
 					supportSupport.Register(brokerConnectionSupport)
@@ -277,13 +288,19 @@ func initCli() bool {
 					brokCon := configYamlSupport.ConfigData.Broker_connection
 					switch brokCon["type"].(string) {
 					case "nats":
-						// Load the nats library.
 						// Init nats broker.
 						jobManagerEvent.ListenEvent(brokCon["key"].(string))
 						postOwnInfoEvent.ListenInfoHardware(brokCon["key"].(string))
 						postOwnInfoEvent.ListenInfoNetwork(brokCon["key"].(string))
 						postOwnInfoEvent.ListenInfoUsage(brokCon["key"].(string))
 					case "rabbitmq":
+						// Init rabbitmq broker.
+						jobManagerEvent.ListenEvent(brokCon["key"].(string))
+						postOwnInfoEvent.ListenInfoHardware(brokCon["key"].(string))
+						postOwnInfoEvent.ListenInfoNetwork(brokCon["key"].(string))
+						postOwnInfoEvent.ListenInfoUsage(brokCon["key"].(string))
+					case "redis":
+						// Init redis broker.
 						jobManagerEvent.ListenEvent(brokCon["key"].(string))
 						postOwnInfoEvent.ListenInfoHardware(brokCon["key"].(string))
 						postOwnInfoEvent.ListenInfoNetwork(brokCon["key"].(string))

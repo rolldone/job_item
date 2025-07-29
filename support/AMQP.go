@@ -221,7 +221,7 @@ func (c *AMQPSupport) SubSync(uuidItem string, group_id string, callback func(me
 	}
 
 	// messageCount := 0
-	maxMessages := opts.Timeout // Maximum number of timeout process
+	maxMessages := opts.Timeout_second // Maximum number of timeout process
 	// Use a timeout duration of 10 seconds
 	timeout := time.After(time.Duration(maxMessages) * time.Second) // Adjust timeout duration as needed
 	var finish bool

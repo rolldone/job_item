@@ -3,7 +3,7 @@ package support
 import "fmt"
 
 type SubSyncOpts struct {
-	Timeout int
+	Timeout_second int
 }
 
 var BROKER_REFRESH_PUBSUB = "refresh_pubsub"
