@@ -178,28 +178,51 @@ func (c *ConfigYamlSupport) loadServerCOnfig() error {
 		panic(1)
 	}
 	var client = &http.Client{}
-	request, err := http.NewRequest("POST", fmt.Sprint(c.ConfigData.End_point, "/api/worker/config"), bytes.NewBuffer(jsonDataParam))
+	endpoint := fmt.Sprint(c.ConfigData.End_point, "/api/worker/config")
+	fmt.Printf("Attempting to connect to server: %s\n", endpoint)
+
+	request, err := http.NewRequest("POST", endpoint, bytes.NewBuffer(jsonDataParam))
 	// request.Header.Set("X-Custom-Header", "myvalue")
 	request.Header.Set("Content-Type", "application/json")
 	if err != nil {
-		fmt.Println("err - http.NewRequest :: ", err)
+		fmt.Printf("ERROR: Failed to create HTTP request to %s :: %v\n", endpoint, err)
 		return err
 		// panic(1)
 	}
+
+	fmt.Println("Sending configuration request to server...")
 	response, err := client.Do(request)
 	if err != nil {
-		fmt.Println("err - client.Do :: ", err)
+		fmt.Printf("ERROR: Connection failed to server %s\n", endpoint)
+		fmt.Printf("This could mean:\n")
+		fmt.Printf("  - Server is down or unreachable\n")
+		fmt.Printf("  - Network connectivity issues\n")
+		fmt.Printf("  - Invalid endpoint URL\n")
+		fmt.Printf("  - Firewall blocking the connection\n")
+		fmt.Printf("Original error: %v\n", err)
 		return err
 	}
 	defer response.Body.Close()
+
+	// Check HTTP status code
+	if response.StatusCode != http.StatusOK {
+		fmt.Printf("ERROR: Server returned HTTP %d status code\n", response.StatusCode)
+		fmt.Printf("Expected 200 OK but got %s\n", response.Status)
+		return fmt.Errorf("server returned non-200 status: %d %s", response.StatusCode, response.Status)
+	}
+
+	fmt.Printf("Successfully connected to server (HTTP %d)\n", response.StatusCode)
 	bodyData := struct {
 		Return ConfigData
 	}{}
 	err = json.NewDecoder(response.Body).Decode(&bodyData)
 	if err != nil {
-		fmt.Println("err :: ", err)
+		fmt.Printf("ERROR: Failed to parse server response JSON :: %v\n", err)
+		fmt.Println("This could mean the server returned invalid JSON format")
 		panic(1)
 	}
+
+	fmt.Println("Configuration successfully received from server")
 	// configData := bodyData["return"].(ConfigData)
 	c.ConfigData.Broker_connection = bodyData.Return.Broker_connection
 	c.ConfigData.Job_item_version_number = bodyData.Return.Job_item_version_number
