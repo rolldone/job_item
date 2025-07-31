@@ -17,6 +17,8 @@ type BrokerConnectionInterface interface {
 	GetKey_P() string
 	IsConnected() bool
 	GetRefreshPubSub() string
+	BasicSub(topic string, callback func(message string)) (func(), error)
+	BasicSubSync(topic string, callback func(message string, err error), opts SubSyncOpts) error
 }
 
 func BrokerConnectionSupportContruct() *BrokerConnectionSupport {
@@ -47,4 +49,23 @@ func (c *BrokerConnectionSupport) GetConnection(key string) BrokerConnectionInte
 
 func (c *BrokerConnectionSupport) GetObject() any {
 	return c
+}
+
+type brokerConStatus struct {
+	STATUS_ERROR     string
+	STATUS_TIMEOUT   string
+	STATUS_TERMINATE string
+	STATUS_FINISH    string
+}
+
+// Create get status follow by Type jobRecordStatus.
+// Define the value by each value.
+// Return in as type jobRecordStatus
+func GetStatus() brokerConStatus {
+	return brokerConStatus{
+		STATUS_ERROR:     "error",
+		STATUS_TIMEOUT:   "timeout",
+		STATUS_TERMINATE: "terminate",
+		STATUS_FINISH:    "finish",
+	}
 }

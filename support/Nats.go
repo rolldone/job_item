@@ -137,6 +137,50 @@ func (c *NatsSupport) SubSync(uuidItem string, group_id string, callback func(me
 }
 
 // Interface from BrokerConnectionInterface
+func (c *NatsSupport) BasicSub(topic string, callback func(message string)) (func(), error) {
+	unsubribce, err := c.nc.Subscribe(topic, func(msg *nats.Msg) {
+		callback(string(msg.Data))
+	})
+	if err != nil {
+		log.Fatal(err)
+		return nil, err
+	}
+	return func() {
+		unsubribce.Unsubscribe()
+	}, nil
+}
+
+// Interface from BrokerConnectionInterface
+func (c *NatsSupport) BasicSubSync(uuidItem string, callback func(message string, err error), opts SubSyncOpts) error {
+	unsubribce, err := c.nc.SubscribeSync(uuidItem)
+	if err != nil {
+		log.Fatal(err)
+		return err
+	}
+
+	var finish bool
+	var errr error
+	var msg *nats.Msg
+
+	for !finish {
+		msg, err = unsubribce.NextMsg(1 * time.Second) // Timeout after 5 seconds if no message
+		if err != nil {
+			if err == nats.ErrTimeout {
+				fmt.Println("Timed out waiting for a message.")
+				// messageCount++
+			}
+			continue
+		}
+		finish = true
+	}
+	// Process the received message
+	fmt.Printf("\n unSubscribeFinish: %s\n", msg.Data)
+	callback(string(msg.Data), nil)
+	unsubribce.Unsubscribe()
+	return errr
+}
+
+// Interface from BrokerConnectionInterface
 func (c *NatsSupport) SetKey_P(key string) {
 	c.key = key
 }

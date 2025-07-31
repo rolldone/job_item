@@ -65,7 +65,7 @@ func (r *RedisSupport) SubSync(uuidItem string, group string, callback func(mess
 	select {
 	case msg := <-pubsub.Channel():
 		lockKey := fmt.Sprintf("lock:%s:%s:%x", uuidItem, group, msg.Payload)
-		ok, err := r.client.SetNX(context.Background(), lockKey, "1", 1*time.Second).Result()
+		ok, err := r.client.SetNX(context.Background(), lockKey, "1", 5*time.Second).Result()
 		if err != nil {
 			callback("", fmt.Errorf("Redis lock error: %v", err))
 			return err

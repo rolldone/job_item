@@ -60,6 +60,7 @@ func main() {
 		panic(1)
 	}
 
+	// Watch the config file and restart the child process
 	restartProcess := func() {
 		watcher, err := fsnotify.NewWatcher()
 		if err != nil {
@@ -309,6 +310,32 @@ func initCli() bool {
 
 					fmt.Println("Job Item is running :)")
 
+					// This function listens for the "job_item_restart" event on the event bus.
+					// When the event is triggered, it attempts to save the current configuration file (config.yaml)
+					// without making any changes to its content. This is used to restart the process because
+					// the parent process is watching the config.yaml file for changes. If saving fails, an error message is logged.
+					restartProcessFromEventBus := func() {
+						eventBusSupport := support.Helper.EventBus
+						err := eventBusSupport.GetBus().SubscribeOnce("job_item_restart", func(data interface{}) {
+							fmt.Println("Restart child process from event bus")
+							err := saveWithoutChange(support.Helper.ConfigYaml.Config_path)
+							if err != nil {
+								fmt.Printf("ERROR: %v\n", err)
+								// Handle the error appropriately
+							}
+						})
+						if err != nil {
+							fmt.Println("Error subscribing to job_item_restart event:", err)
+							return
+						}
+					}
+
+					go restartProcessFromEventBus()
+
+					// Register gin support
+					// ginSupport := support.GinConstruct()
+					// supportSupport.Register(ginSupport)
+
 					runtime.Goexit()
 
 					fmt.Println("Exit")
@@ -325,3 +352,30 @@ func initCli() bool {
 	// It mean bypass
 	return flag == ""
 }
+
+func saveWithoutChange(filePath string) error {
+	// Read the current content of the file
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		fmt.Printf("ERROR: Failed to read %s: %v\n", filePath, err)
+		return err
+	}
+
+	// Write the same content back to the file
+	err = os.WriteFile(filePath, data, 0644)
+	if err != nil {
+		fmt.Printf("ERROR: Failed to save %s: %v\n", filePath, err)
+		return err
+	}
+
+	fmt.Printf("Successfully saved %s without changes\n", filePath)
+	return nil
+}
+
+// Example usage in your main function or relevant part of the code:
+// data := []byte("your YAML content here") // Replace with actual YAML content
+// err := saveConfig("config.yaml", data)
+// if err != nil {
+//     fmt.Printf("ERROR: %v\n", err)
+//     // Handle the error appropriately
+// }

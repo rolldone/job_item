@@ -133,6 +133,19 @@ func (c *JobManagerEvent) ListenEvent(conn_name string) {
 			if !isMatch {
 				fmt.Println("Event :", v.Event, " not register yet. Please check on job manager with app project that you register it.")
 			}
+
+			// Subscribe to the "restart" event for the current project application UUID.
+			// When the event is triggered, it publishes a "job_item_restart" event to the event bus.
+			// This is used to signal that the child process should be restarted.
+			// If the subscription fails, an error is logged. Otherwise, the unsubscribe function is added to the list.
+			unsub, err := conn.BasicSub(fmt.Sprint(project_app_uuid, ".", "restart"), func(message string) {
+				support.Helper.EventBus.GetBus().Publish("job_item_restart", nil)
+			})
+			if err != nil {
+				log.Println("Error subscribing to restart event:", err)
+			} else {
+				_ = append(unsubcribes, unsub)
+			}
 		}
 	}
 	initPubSubChannel()

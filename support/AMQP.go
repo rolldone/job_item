@@ -281,6 +281,69 @@ func (c *AMQPSupport) SubSync(uuidItem string, group_id string, callback func(me
 }
 
 // Interface from BrokerConnectionInterface
+func (c *AMQPSupport) BasicSub(topic string, callback func(message string)) (func(), error) {
+	key_topic := topic
+	// if group_id == "" {
+	// 	key_topic = topic
+	// }
+	_, err := c.ch.QueueDeclare(key_topic, false, true, false, false, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to declare queue: %w", err)
+	}
+	msgs, err := c.ch.Consume(key_topic, "", true, false, false, false, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to register consumer: %w", err)
+	}
+	go func() {
+		for msg := range msgs {
+			log.Printf("Received a message: %s", msg.Body)
+			callback(string(msg.Body))
+			// Process the message here
+		}
+	}()
+	// Return a closure to cancel the consumer
+	cancel := func() {
+		log.Println("Sub AMQPSupport :: ", key_topic, " :: Closing")
+		if _, err := c.ch.QueueDelete(key_topic, false, false, false); err != nil {
+			log.Printf("Failed to cancel consumer: %v", err)
+		}
+		log.Println("Sub AMQPSupport :: ", key_topic, " :: Closed")
+	}
+	return cancel, nil
+}
+
+// Interface from BrokerConnectionInterface
+func (c *AMQPSupport) BasicSubSync(uuidItem string, callback func(message string, err error), opts SubSyncOpts) error {
+	key_topic := uuidItem
+
+	_, err := c.ch.QueueDeclare(key_topic, false, true, false, false, nil)
+	if err != nil {
+		return fmt.Errorf("failed to declare queue: %w", err)
+	}
+	msgs, err := c.ch.Consume(key_topic, "", true, false, false, false, nil)
+	if err != nil {
+		return fmt.Errorf("failed to register consumer: %w", err)
+	}
+
+	var errr error
+
+	msg, ok := <-msgs
+	if !ok {
+		errr = errors.New("channel closed")
+		callback(GetStatus().STATUS_ERROR, errr)
+	}
+	// Process the message here
+	// Process the received message
+	log.Printf("unSubscribeFinish: %s\n", msg.Body)
+	if _, errr = c.ch.QueueDelete(key_topic, false, false, false); errr != nil {
+		log.Printf("Failed to cancel consumer: %v", errr)
+	}
+	callback(string(msg.Body), nil)
+
+	return errr
+}
+
+// Interface from BrokerConnectionInterface
 func (c *AMQPSupport) SetKey_P(key string) {
 	c.key = key
 }
