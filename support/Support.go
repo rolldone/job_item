@@ -23,6 +23,7 @@ type SupportService struct {
 	BrokerConnection *BrokerConnectionSupport
 	EventBus         *EventBusSupport
 	HardwareInfo     *HardwareInfoSupport
+	Gin              *GinSupport
 }
 
 func (c *SupportService) Register(tt SupportInterface) {
@@ -36,6 +37,8 @@ func (c *SupportService) Register(tt SupportInterface) {
 		c.EventBus = tt.(*EventBusSupport)
 	case *HardwareInfoSupport:
 		c.HardwareInfo = tt.(*HardwareInfoSupport)
+	case *GinSupport:
+		c.Gin = tt.(*GinSupport)
 	default:
 		log.Fatal("This struct is part of interface but not register yet to SupportService. Please Register it")
 		panic(1)

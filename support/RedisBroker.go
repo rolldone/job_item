@@ -105,12 +105,26 @@ func (c *RedisSupport) GetRefreshPubSub() string {
 }
 
 func (r *RedisSupport) BasicSub(topic string, callback func(message string)) (func(), error) {
-	return r.Sub(topic, "", callback)
+	pubsub := r.client.Subscribe(context.Background(), topic)
+	go func() {
+		for msg := range pubsub.Channel() {
+			callback(msg.Payload)
+		}
+	}()
+	return func() { pubsub.Close() }, nil
 }
 
 func (r *RedisSupport) BasicSubSync(topic string, callback func(message string, err error), opts SubSyncOpts) error {
-	err := r.SubSync(topic, "", callback, opts)
-	return err
+	pubsub := r.client.Subscribe(context.Background(), topic)
+	defer pubsub.Close()
+	select {
+	case msg := <-pubsub.Channel():
+		callback(msg.Payload, nil)
+		return nil
+	case <-time.After(time.Duration(opts.Timeout_second) * time.Second):
+		callback("", fmt.Errorf("timeout"))
+		return nil
+	}
 }
 
 // Interface from SupportInterface

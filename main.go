@@ -92,7 +92,7 @@ func main() {
 				run_child <- "restart"
 				fmt.Println("Restart child process")
 				is_done_watch = true
-				fmt.Println("event.Has(fsnotify.Write) :: ", event.Has(fsnotify.Write))
+				// fmt.Println("event.Has(fsnotify.Write) :: ", event.Has(fsnotify.Write))
 				// if event.Has(fsnotify.Write) {
 				// }
 			case err, ok := <-watcher.Errors:
@@ -333,8 +333,8 @@ func initCli() bool {
 					go restartProcessFromEventBus()
 
 					// Register gin support
-					// ginSupport := support.GinConstruct()
-					// supportSupport.Register(ginSupport)
+					ginSupport := support.GinConstruct()
+					supportSupport.Register(ginSupport)
 
 					runtime.Goexit()
 

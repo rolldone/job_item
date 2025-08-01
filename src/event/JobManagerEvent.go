@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"time"
 
 	"github.com/hoisie/mustache"
@@ -134,18 +135,19 @@ func (c *JobManagerEvent) ListenEvent(conn_name string) {
 				fmt.Println("Event :", v.Event, " not register yet. Please check on job manager with app project that you register it.")
 			}
 
-			// Subscribe to the "restart" event for the current project application UUID.
-			// When the event is triggered, it publishes a "job_item_restart" event to the event bus.
-			// This is used to signal that the child process should be restarted.
-			// If the subscription fails, an error is logged. Otherwise, the unsubscribe function is added to the list.
-			unsub, err := conn.BasicSub(fmt.Sprint(project_app_uuid, ".", "restart"), func(message string) {
-				support.Helper.EventBus.GetBus().Publish("job_item_restart", nil)
-			})
-			if err != nil {
-				log.Println("Error subscribing to restart event:", err)
-			} else {
-				_ = append(unsubcribes, unsub)
-			}
+		}
+		// Subscribe to the "restart" event for the current project application UUID.
+		// When the event is triggered, it publishes a "job_item_restart" event to the event bus.
+		// This is used to signal that the child process should be restarted.
+		// If the subscription fails, an error is logged. Otherwise, the unsubscribe function is added to the list.
+		unsub, err := conn.BasicSub(fmt.Sprint(project_app_uuid, ".", "restart"), func(message string) {
+			fmt.Println("Received restart event for project_app_uuid:", project_app_uuid)
+			support.Helper.EventBus.GetBus().Publish("job_item_restart", nil)
+		})
+		if err != nil {
+			log.Println("Error subscribing to restart event:", err)
+		} else {
+			_ = append(unsubcribes, unsub)
 		}
 	}
 	initPubSubChannel()
@@ -211,11 +213,10 @@ func (c *JobManagerEventItem) RunGoroutine(command string, task_id string) {
 		"JOB_ITEM_TASK_ID="+task_id,
 		"JOB_ITEM_PROJECT_ID="+support.Helper.ConfigYaml.ConfigData.Credential.Project_id,
 		"JOB_ITEM_PROJECT_KEY="+support.Helper.ConfigYaml.ConfigData.Credential.Secret_key,
-		// "JOB_ITEM_MSG_NOTIF_HOST=http://localhost:"+strconv.Itoa(support.Helper.Gin.Port)+"/msg/notif",
+		"JOB_ITEM_MSG_NOTIF_HOST=http://localhost:"+strconv.Itoa(support.Helper.Gin.Port)+"/msg/notif/"+task_id,
 	)
 	cmd.Env = envInvolve
 	c.WatchProcessCMD(cmd, task_id)
-
 }
 
 func (c *JobManagerEventItem) WatchProcessCMD(cmd *exec.Cmd, task_id string) {

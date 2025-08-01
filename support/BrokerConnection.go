@@ -56,6 +56,7 @@ type brokerConStatus struct {
 	STATUS_TIMEOUT   string
 	STATUS_TERMINATE string
 	STATUS_FINISH    string
+	STATUS_PROCESS   string
 }
 
 // Create get status follow by Type jobRecordStatus.
@@ -67,5 +68,6 @@ func GetStatus() brokerConStatus {
 		STATUS_TIMEOUT:   "timeout",
 		STATUS_TERMINATE: "terminate",
 		STATUS_FINISH:    "finish",
+		STATUS_PROCESS:   "process",
 	}
 }
