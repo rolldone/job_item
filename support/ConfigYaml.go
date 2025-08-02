@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"strings"
 	"syscall"
+	"time"
 
 	"dario.cat/mergo"
 	"gopkg.in/yaml.v3"
@@ -85,6 +86,14 @@ type Credential struct {
 	Secret_key string `yaml:"secret_key"`
 }
 
+type ExecConfig struct {
+	Name        string            `yaml:"name"`
+	Key         string            `yaml:"key"`
+	Cmd         string            `yaml:"cmd"`
+	Env         map[string]string `yaml:"env"`
+	Working_dir string            `yaml:"working_dir"` // Add Working_dir field
+}
+
 type ConfigData struct {
 	End_point  string     `yaml:"end_point"`
 	Credential Credential `yaml:"credential"`
@@ -93,9 +102,10 @@ type ConfigData struct {
 	Broker_connection       map[string]interface{} `json:"broker_connection,omitempty"`
 	Project                 model.ProjectDataView
 	Jobs                    []ConfigJob
-	Job_item_version_number int    `json:"job_item_version_number,omitempty"`
-	Job_item_version        string `json:"job_item_version,omitempty"`
-	Job_item_link           string `json:"job_item_link,omitempty"`
+	Execs                   []ExecConfig `json:"execs,omitempty"` // Add execs property
+	Job_item_version_number int          `json:"job_item_version_number,omitempty"`
+	Job_item_version        string       `json:"job_item_version,omitempty"`
+	Job_item_link           string       `json:"job_item_link,omitempty"`
 }
 
 func ConfigYamlSupportContruct(config_path string) (*ConfigYamlSupport, error) {
@@ -123,9 +133,13 @@ func ConfigYamlSupportContruct(config_path string) (*ConfigYamlSupport, error) {
 	}
 	gg.loadConfigYaml()
 	gg.useEnvToYamlValue()
-	err = gg.loadServerCOnfig()
-	if err != nil {
-		return nil, err
+	if gg.ConfigData.End_point != "" {
+		err = gg.loadServerCOnfig()
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		fmt.Println("WARNING: End point is not set, using local config only")
 	}
 	return &gg, nil
 }
@@ -148,6 +162,11 @@ func (c *ConfigYamlSupport) loadConfigYaml() {
 	err = yaml.Unmarshal(yamlFile, &c.ConfigData)
 	if err != nil {
 		log.Fatalf("Unmarshal: %v", err)
+	}
+
+	// Debugging: Print loaded execs
+	for _, exec := range c.ConfigData.Execs {
+		fmt.Printf("Loaded exec: %s, Key: %s, Cmd: %s\n", exec.Name, exec.Key, exec.Cmd)
 	}
 }
 
@@ -386,6 +405,14 @@ func printOutput(reader io.Reader) {
 	}
 }
 
+// Helper function to print output with identity prefix
+func printOutputWithIdentity(reader io.Reader, identity string) {
+	scanner := bufio.NewScanner(reader)
+	for scanner.Scan() {
+		fmt.Printf("[%s] %s\n", identity, strings.TrimSpace(scanner.Text()))
+	}
+}
+
 func (c *ConfigYamlSupport) GetTypeBrokerCon(v map[string]interface{}) BrokerConInterface {
 	switch v["type"].(string) {
 	case "nats":
@@ -464,4 +491,107 @@ func (c ConfigYamlSupport) GetRabbitMQBrokenCon(gg BrokerConInterface) AMQP_Brok
 func (c ConfigYamlSupport) GetRedisBrokerCon(gg BrokerConInterface) RedisBrokerConnection {
 	kk := gg.GetConnection().(RedisBrokerConnection)
 	return kk
+}
+
+// waitWithTimeout waits for the command to finish with a timeout.
+func waitWithTimeout(cmd *exec.Cmd, timeout time.Duration) error {
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+
+	select {
+	case err := <-done:
+		return err // Process finished
+	case <-time.After(timeout):
+		// Timeout occurred, but do not kill the process
+		return nil // Return nil to indicate no error
+	}
+}
+
+// RunExecsProcess runs all exec commands defined in the configuration.
+// It captures their output and prints it to the console.
+func (c *ConfigYamlSupport) RunExecsProcess() []*exec.Cmd {
+	var cmd []*exec.Cmd
+	retryCount := 5               // Number of retry attempts
+	retryDelay := 2 * time.Second // Delay between retries
+
+	for _, execConfig := range c.ConfigData.Execs {
+		fmt.Printf("Running exec: %s, Key: %s, Cmd: %s\n", execConfig.Name, execConfig.Key, execConfig.Cmd)
+
+		// Resolve working directory
+		workingDir := execConfig.Working_dir
+		if !filepath.IsAbs(workingDir) {
+			workingDir = filepath.Join(filepath.Dir(c.Config_path), workingDir)
+		}
+
+		for attempt := 1; attempt <= retryCount; attempt++ {
+			if runtime.GOOS == "windows" {
+				cmd = append(cmd, exec.Command("cmd", "/C", execConfig.Cmd))
+			} else {
+				cmd = append(cmd, exec.Command("bash", "-c", execConfig.Cmd))
+			}
+
+			envInvolve := append(os.Environ(), "")
+			cmd[len(cmd)-1].Env = envInvolve // Set the environment variables
+			cmd[len(cmd)-1].Dir = workingDir // Set the working directory
+
+			// Set environment variables
+			for key, value := range execConfig.Env {
+				cmd[len(cmd)-1].Env = append(cmd[len(cmd)-1].Env, fmt.Sprintf("%s=%s", key, value))
+			}
+
+			// Make the process independent by setting SysProcAttr
+			cmd[len(cmd)-1].SysProcAttr = &syscall.SysProcAttr{
+				Setpgid: true,
+			}
+
+			// Capture stdout and stderr
+			stdout, err := cmd[len(cmd)-1].StdoutPipe()
+			if err != nil {
+				fmt.Printf("Error creating stdout pipe for %s: %v\n", execConfig.Name, err)
+				cmd = cmd[:len(cmd)-1] // Remove the last command if there's an error
+				continue
+			}
+			stderr, err := cmd[len(cmd)-1].StderrPipe()
+			if err != nil {
+				fmt.Printf("Error creating stderr pipe for %s: %v\n", execConfig.Name, err)
+				cmd = cmd[:len(cmd)-1] // Remove the last command if there's an error
+				continue
+			}
+
+			err = cmd[len(cmd)-1].Start()
+			if err != nil {
+				fmt.Printf("Error starting command for %s (Attempt %d/%d): %v\n", execConfig.Name, attempt, retryCount, err)
+				cmd = cmd[:len(cmd)-1] // Remove the last command if there's an error
+				if attempt == retryCount {
+					fmt.Printf("Failed to execute command for %s after %d attempts\n", execConfig.Name, retryCount)
+				}
+				if attempt < retryCount {
+					fmt.Printf("Retrying command for %s after %v...\n", execConfig.Name, retryDelay)
+					time.Sleep(retryDelay) // Add delay before retrying
+				}
+				continue
+			}
+
+			// Wait for the command to finish with a timeout
+			err = waitWithTimeout(cmd[len(cmd)-1], 2*time.Second)
+			if err != nil {
+				fmt.Printf("Error waiting for command for %s (Attempt %d/%d): %v\n", execConfig.Name, attempt, retryCount, err)
+				if attempt == retryCount {
+					fmt.Printf("Failed to execute command for %s after %d attempts\n", execConfig.Name, retryCount)
+				}
+				if attempt < retryCount {
+					fmt.Printf("Retrying command for %s after %v...\n", execConfig.Name, retryDelay)
+					time.Sleep(retryDelay) // Add delay before retrying
+				}
+				continue
+			}
+
+			go printOutputWithIdentity(stdout, execConfig.Name)
+			go printOutputWithIdentity(stderr, execConfig.Name)
+			break // Exit retry loop on success
+		}
+	}
+	return cmd
 }

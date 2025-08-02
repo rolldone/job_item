@@ -7,7 +7,9 @@ import (
 	"job_item/support"
 	"log"
 	"os"
+	"os/exec"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -20,7 +22,7 @@ const VERSION_NUMBER = 3
 const VERSION_APP = "v0.1.1"
 
 func main() {
-
+	var wg sync.WaitGroup
 	// Check the init cli first is with nested command or not
 	// argsWithoutProg := os.Args[1:]
 	bypass := initCli()
@@ -54,6 +56,7 @@ func main() {
 	is_run := true
 
 	run_child <- "start"
+	cmdExecArr := configYamlSupport.RunExecsProcess()
 	cmd, err := configYamlSupport.RunChildProcess()
 	if err != nil {
 		fmt.Println(err)
@@ -88,13 +91,19 @@ func main() {
 					fmt.Println(err)
 					panic(1)
 				}
+				for _, cmdExec := range cmdExecArr {
+					// Find the process by PID
+					err := cmdExec.Process.Kill()
+					if err != nil {
+						fmt.Println("Error kill process:", err)
+					}
+					cmdExec = nil
+				}
+				cmdExecArr = []*exec.Cmd{}
 				cmd = nil
 				run_child <- "restart"
 				fmt.Println("Restart child process")
 				is_done_watch = true
-				// fmt.Println("event.Has(fsnotify.Write) :: ", event.Has(fsnotify.Write))
-				// if event.Has(fsnotify.Write) {
-				// }
 			case err, ok := <-watcher.Errors:
 				if !ok {
 					return
@@ -123,29 +132,36 @@ func main() {
 	fmt.Println("----------------------------------------------------")
 
 	for is_run {
-		select {
-		case gg := <-run_child:
-			switch gg {
-			case "start":
+		gg := <-run_child
+		switch gg {
+		case "start":
+			wg.Add(1)
+			go func() {
+				defer func() {
+					wg.Done()
+				}()
 				err = cmd.Wait()
 				if err != nil {
 					fmt.Println("The command get : ", err)
 				}
-			case "restart":
-				cmd, err = configYamlSupport.RunChildProcess()
-				if err != nil {
-					fmt.Println(err)
-					panic(1)
-				}
-				run_child <- "start"
-				go restartProcess()
+			}()
+			wg.Wait() // Wait for all goroutines to finish
+			fmt.Println("Exiting job_item process")
+		case "restart":
+			cmd, err = configYamlSupport.RunChildProcess()
+			if err != nil {
+				fmt.Println(err)
+				panic(1)
 			}
+			cmdExecArr = configYamlSupport.RunExecsProcess()
+
+			run_child <- "start"
+			go restartProcess()
 		default:
 			fmt.Println("Nothing to do")
 			is_run = false
 		}
 	}
-
 }
 
 func tryRestartProcess(waitingRecursive int, callback func() bool) {
@@ -213,6 +229,7 @@ func initCli() bool {
 				// Aliases: []string{"c"},
 				Usage: "options for config",
 				Action: func(ctx *cli.Context) error {
+					// var cmds []*exec.Cmd
 					supportSupport := support.SupportConstruct()
 
 					brokerConnectionSupport := support.BrokerConnectionSupportContruct()
@@ -337,8 +354,6 @@ func initCli() bool {
 					supportSupport.Register(ginSupport)
 
 					runtime.Goexit()
-
-					fmt.Println("Exit")
 					return nil
 				},
 			},
