@@ -95,10 +95,8 @@ func main() {
 				support.Helper.PrintGroupName("event: " + event.String())
 				support.Helper.PrintGroupName("modified file: " + event.Name)
 				configYamlSupport.CloseAllGroupProcesses([]*exec.Cmd{cmd, cmdExec})
-				err := cmd.Wait()
-				if err != nil {
-					support.Helper.PrintErrName("Error waiting for child command: " + err.Error())
-				}
+
+				// For cmd is not have child process, so we only wait cmdExec for it
 				err = cmdExec.Wait()
 				if err != nil {
 					support.Helper.PrintErrName("Error waiting for exec command: " + err.Error())
@@ -144,10 +142,7 @@ func main() {
 		for sig := range signalChan {
 			support.Helper.PrintGroupName("Received signal: " + sig.String())
 			configYamlSupport.CloseAllGroupProcesses([]*exec.Cmd{cmd, cmdExec})
-			err := cmd.Wait()
-			if err != nil {
-				support.Helper.PrintErrName("Error waiting for child command: " + err.Error())
-			}
+			// For cmd is not have child process, so we only wait cmdExec for it
 			err = cmdExec.Wait()
 			if err != nil {
 				support.Helper.PrintErrName("Error waiting for exec command: " + err.Error())
