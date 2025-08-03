@@ -1,3 +1,12 @@
+// Package support provides utilities for managing job execution, broker connections, and configurations.
+//
+// This package includes:
+// - Definitions for broker connection types (NATS, AMQP, Redis).
+// - Configuration structures for jobs and execution settings.
+// - Functions to load and manage YAML configurations.
+// - Methods to execute child processes with retries and timeouts.
+// - Helper functions for handling process output and environment variables.
+
 package support
 
 import (
@@ -108,40 +117,52 @@ type ConfigData struct {
 	Job_item_link           string       `json:"job_item_link,omitempty"`
 }
 
-func ConfigYamlSupportContruct(config_path string) (*ConfigYamlSupport, error) {
-	fmt.Println("----------------------------------------------------------")
-	stat, err := os.Stat(filepath.Dir(config_path))
+type ConfigYamlSupportConstructPropsType struct {
+	// LoadConfigYaml loads the configuration from a YAML file.
+	RequestToServer bool
+	Config_path     string
+}
+
+func ConfigYamlSupportContruct(props ConfigYamlSupportConstructPropsType) (*ConfigYamlSupport, error) {
+
+	gg := ConfigYamlSupport{
+		Config_path: filepath.Base(props.Config_path),
+	}
+
+	stat, err := os.Stat(filepath.Dir(props.Config_path))
 	if err != nil {
-		fmt.Println("Error working dir :: ", err)
+		gg.printGroupName("Error getting directory stat: " + err.Error())
 		panic(1)
 	}
 	if stat.IsDir() {
-		fmt.Println("Set working dir :: ", filepath.Dir(config_path))
+		gg.printGroupName("Set working dir :: " + filepath.Dir(props.Config_path))
 	} else {
-		fmt.Println("Set working dir :: ", ".")
+		gg.printGroupName("Set working dir :: .")
 	}
-	fmt.Println("----------------------------------------------------------")
 
-	err = os.Chdir(filepath.Dir(config_path))
+	err = os.Chdir(filepath.Dir(props.Config_path))
 	if err != nil {
-		fmt.Println("Error chdir :: ", err)
+		gg.printGroupName("Error chdir :: " + err.Error())
 		panic(1)
 	}
 
-	gg := ConfigYamlSupport{
-		Config_path: filepath.Base(config_path),
-	}
-	gg.loadConfigYaml()
+	gg.LoadConfigYaml()
 	gg.useEnvToYamlValue()
-	if gg.ConfigData.End_point != "" {
-		err = gg.loadServerCOnfig()
-		if err != nil {
-			return nil, err
+	if props.RequestToServer {
+		if gg.ConfigData.End_point != "" {
+			err = gg.loadServerCOnfig()
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			fmt.Println("WARNING: End point is not set, using local config only")
 		}
-	} else {
-		fmt.Println("WARNING: End point is not set, using local config only")
 	}
 	return &gg, nil
+}
+
+func (c *ConfigYamlSupport) printGroupName(printText string) {
+	fmt.Println(Helper.Segment_app, " >> ", printText)
 }
 
 type ConfigYamlSupport struct {
@@ -150,9 +171,9 @@ type ConfigYamlSupport struct {
 	Config_path       string
 }
 
-// Load the config from config.yaml.
-// Check it the config problem or not if problem force close.
-func (c *ConfigYamlSupport) loadConfigYaml() {
+// LoadConfigYaml loads the configuration from a YAML file.
+// It panics if the file cannot be read or parsed.
+func (c *ConfigYamlSupport) LoadConfigYaml() {
 	yamlFile, err := os.ReadFile(c.Config_path)
 	if err != nil {
 		fmt.Println("Problem open file config.yaml ", err)
@@ -163,19 +184,15 @@ func (c *ConfigYamlSupport) loadConfigYaml() {
 	if err != nil {
 		log.Fatalf("Unmarshal: %v", err)
 	}
-
-	// Debugging: Print loaded execs
-	for _, exec := range c.ConfigData.Execs {
-		fmt.Printf("Loaded exec: %s, Key: %s, Cmd: %s\n", exec.Name, exec.Key, exec.Cmd)
-	}
 }
 
+// useEnvToYamlValue updates the configuration values using environment variables.
 func (c *ConfigYamlSupport) useEnvToYamlValue() {
 	helper.Fromenv(&c.ConfigData)
 }
 
-// Request the config to the server and get configuration.
-// Store to the ConfigData Variable.
+// loadServerCOnfig requests the configuration from the server and updates the ConfigData.
+// It returns an error if the request fails or the response is invalid.
 func (c *ConfigYamlSupport) loadServerCOnfig() error {
 	var param = map[string]interface{}{}
 	param["project_id"] = c.ConfigData.Credential.Project_id
@@ -187,61 +204,61 @@ func (c *ConfigYamlSupport) loadServerCOnfig() error {
 
 	hostInfo, err := Helper.HardwareInfo.GetInfoHardware()
 	if err != nil {
-		fmt.Println("err :: ", err)
+		c.printGroupName("Error getting hardware info: " + err.Error())
 		panic(1)
 	}
 	param["host"] = hostInfo
 	jsonDataParam, err := json.Marshal(param)
 	if err != nil {
-		fmt.Println("err :: ", err)
+		c.printGroupName("Error marshalling JSON: " + err.Error())
 		panic(1)
 	}
 	var client = &http.Client{}
 	endpoint := fmt.Sprint(c.ConfigData.End_point, "/api/worker/config")
-	fmt.Printf("Attempting to connect to server: %s\n", endpoint)
+	c.printGroupName("Attempting to connect to server: " + endpoint)
 
 	request, err := http.NewRequest("POST", endpoint, bytes.NewBuffer(jsonDataParam))
 	// request.Header.Set("X-Custom-Header", "myvalue")
 	request.Header.Set("Content-Type", "application/json")
 	if err != nil {
-		fmt.Printf("ERROR: Failed to create HTTP request to %s :: %v\n", endpoint, err)
+		c.printGroupName("Failed to create HTTP request to " + endpoint + " :: " + err.Error())
 		return err
 		// panic(1)
 	}
 
-	fmt.Println("Sending configuration request to server...")
+	c.printGroupName("Sending configuration request to server...")
 	response, err := client.Do(request)
 	if err != nil {
-		fmt.Printf("ERROR: Connection failed to server %s\n", endpoint)
-		fmt.Printf("This could mean:\n")
-		fmt.Printf("  - Server is down or unreachable\n")
-		fmt.Printf("  - Network connectivity issues\n")
-		fmt.Printf("  - Invalid endpoint URL\n")
-		fmt.Printf("  - Firewall blocking the connection\n")
-		fmt.Printf("Original error: %v\n", err)
+		c.printGroupName("Connection failed to server " + endpoint)
+		c.printGroupName("This could mean:")
+		c.printGroupName("  - Server is down or unreachable")
+		c.printGroupName("  - Network connectivity issues")
+		c.printGroupName("  - Invalid endpoint URL")
+		c.printGroupName("  - Firewall blocking the connection")
+		c.printGroupName("Original error: " + err.Error())
 		return err
 	}
 	defer response.Body.Close()
 
 	// Check HTTP status code
 	if response.StatusCode != http.StatusOK {
-		fmt.Printf("ERROR: Server returned HTTP %d status code\n", response.StatusCode)
-		fmt.Printf("Expected 200 OK but got %s\n", response.Status)
+		c.printGroupName("ERROR: Server returned HTTP " + fmt.Sprint(response.StatusCode) + " status code")
+		c.printGroupName("Expected 200 OK but got " + response.Status)
 		return fmt.Errorf("server returned non-200 status: %d %s", response.StatusCode, response.Status)
 	}
 
-	fmt.Printf("Successfully connected to server (HTTP %d)\n", response.StatusCode)
+	c.printGroupName("Successfully connected to server (HTTP " + fmt.Sprint(response.StatusCode) + ")")
 	bodyData := struct {
 		Return ConfigData
 	}{}
 	err = json.NewDecoder(response.Body).Decode(&bodyData)
 	if err != nil {
-		fmt.Printf("ERROR: Failed to parse server response JSON :: %v\n", err)
-		fmt.Println("This could mean the server returned invalid JSON format")
+		c.printGroupName("ERROR: Failed to parse server response JSON :: " + err.Error())
+		c.printGroupName("This could mean the server returned invalid JSON format")
 		panic(1)
 	}
 
-	fmt.Println("Configuration successfully received from server")
+	c.printGroupName("Configuration successfully received from server")
 	// configData := bodyData["return"].(ConfigData)
 	c.ConfigData.Broker_connection = bodyData.Return.Broker_connection
 	c.ConfigData.Job_item_version_number = bodyData.Return.Job_item_version_number
@@ -308,8 +325,8 @@ func (c *ConfigYamlSupport) DownloadNewApp(versionNumber int) error {
 	return nil
 }
 
-// This function for handle when user exit, create other process
-// To rename the new app to current app name
+// replaceApp replaces the current application with a new version.
+// It handles signals to ensure a graceful replacement process.
 func (c *ConfigYamlSupport) replaceApp(app_new string) {
 	go func() {
 		defer func() {
@@ -331,7 +348,7 @@ func (c *ConfigYamlSupport) replaceApp(app_new string) {
 
 		// Block until a signal is received
 		sig := <-sigCh
-		fmt.Printf("Received signal: %v\n", sig)
+		Helper.PrintGroupName(fmt.Sprintf("Received signal: %v\n", sig))
 	}()
 }
 
@@ -344,60 +361,7 @@ func makeExecutable(path string) error {
 	return nil
 }
 
-func (c *ConfigYamlSupport) RunChildProcess() (*exec.Cmd, error) {
-	executablePath, err := os.Executable()
-	if err != nil {
-		return nil, err
-	}
-	if c.child_process_app != nil {
-		pwd, err := os.Getwd()
-		if err != nil {
-			fmt.Println(err)
-			os.Exit(1)
-		}
-		executablePath = fmt.Sprint(pwd, "/", *c.child_process_app)
-	}
-	var cmd *exec.Cmd
-	os_type := runtime.GOOS
-	config_path := c.Config_path
-
-	if config_path == "" {
-		config_path = "config.yaml"
-	}
-
-	switch os_type {
-	case "windows":
-		cmd = exec.Command(executablePath, "child_process", "--config", config_path)
-	case "darwin":
-		cmd = exec.Command(executablePath, "child_process", "--config", config_path)
-	case "linux":
-		cmd = exec.Command(executablePath, "child_process", "--config", config_path)
-	}
-
-	// cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: false}
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		fmt.Println("Error creating stdout pipe:", err)
-		return nil, err
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		fmt.Println("Error creating stderr pipe:", err)
-		return nil, err
-	}
-
-	err = cmd.Start()
-	if err != nil {
-		return nil, err
-	}
-
-	go printOutput(stdout)
-	go printOutput(stderr)
-
-	return cmd, nil
-}
-
+// printOutput reads and prints the output from the provided reader.
 func printOutput(reader io.Reader) {
 	scanner := bufio.NewScanner(reader)
 	for scanner.Scan() {
@@ -405,7 +369,7 @@ func printOutput(reader io.Reader) {
 	}
 }
 
-// Helper function to print output with identity prefix
+// printOutputWithIdentity reads and prints the output from the provided reader with an identity prefix.
 func printOutputWithIdentity(reader io.Reader, identity string) {
 	scanner := bufio.NewScanner(reader)
 	for scanner.Scan() {
@@ -413,6 +377,7 @@ func printOutputWithIdentity(reader io.Reader, identity string) {
 	}
 }
 
+// GetTypeBrokerCon returns the appropriate broker connection type based on the provided configuration.
 func (c *ConfigYamlSupport) GetTypeBrokerCon(v map[string]interface{}) BrokerConInterface {
 	switch v["type"].(string) {
 	case "nats":
@@ -474,26 +439,31 @@ func (c *ConfigYamlSupport) GetTypeBrokerCon(v map[string]interface{}) BrokerCon
 	return nil
 }
 
+// GetObject returns the ConfigYamlSupport object.
 func (c *ConfigYamlSupport) GetObject() any {
 	return c
 }
 
+// GetNatsBrokerCon returns the NATS broker connection from the provided interface.
 func (c ConfigYamlSupport) GetNatsBrokerCon(gg BrokerConInterface) NatsBrokerConnection {
 	kk := gg.GetConnection().(NatsBrokerConnection)
 	return kk
 }
 
+// GetRabbitMQBrokenCon returns the RabbitMQ broker connection from the provided interface.
 func (c ConfigYamlSupport) GetRabbitMQBrokenCon(gg BrokerConInterface) AMQP_BrokerConnection {
 	kk := gg.GetConnection().(AMQP_BrokerConnection)
 	return kk
 }
 
+// GetRedisBrokerCon returns the Redis broker connection from the provided interface.
 func (c ConfigYamlSupport) GetRedisBrokerCon(gg BrokerConInterface) RedisBrokerConnection {
 	kk := gg.GetConnection().(RedisBrokerConnection)
 	return kk
 }
 
 // waitWithTimeout waits for the command to finish with a timeout.
+// If the timeout is reached, it returns nil without killing the process.
 func waitWithTimeout(cmd *exec.Cmd, timeout time.Duration) error {
 	done := make(chan error, 1)
 	go func() {
@@ -507,91 +477,4 @@ func waitWithTimeout(cmd *exec.Cmd, timeout time.Duration) error {
 		// Timeout occurred, but do not kill the process
 		return nil // Return nil to indicate no error
 	}
-}
-
-// RunExecsProcess runs all exec commands defined in the configuration.
-// It captures their output and prints it to the console.
-func (c *ConfigYamlSupport) RunExecsProcess() []*exec.Cmd {
-	var cmd []*exec.Cmd
-	retryCount := 5               // Number of retry attempts
-	retryDelay := 2 * time.Second // Delay between retries
-
-	for _, execConfig := range c.ConfigData.Execs {
-		fmt.Printf("Running exec: %s, Key: %s, Cmd: %s\n", execConfig.Name, execConfig.Key, execConfig.Cmd)
-
-		// Resolve working directory
-		workingDir := execConfig.Working_dir
-		if !filepath.IsAbs(workingDir) {
-			workingDir = filepath.Join(filepath.Dir(c.Config_path), workingDir)
-		}
-
-		for attempt := 1; attempt <= retryCount; attempt++ {
-			if runtime.GOOS == "windows" {
-				cmd = append(cmd, exec.Command("cmd", "/C", execConfig.Cmd))
-			} else {
-				cmd = append(cmd, exec.Command("bash", "-c", execConfig.Cmd))
-			}
-
-			envInvolve := append(os.Environ(), "")
-			cmd[len(cmd)-1].Env = envInvolve // Set the environment variables
-			cmd[len(cmd)-1].Dir = workingDir // Set the working directory
-
-			// Set environment variables
-			for key, value := range execConfig.Env {
-				cmd[len(cmd)-1].Env = append(cmd[len(cmd)-1].Env, fmt.Sprintf("%s=%s", key, value))
-			}
-
-			// Make the process independent by setting SysProcAttr
-			cmd[len(cmd)-1].SysProcAttr = &syscall.SysProcAttr{
-				Setpgid: true,
-			}
-
-			// Capture stdout and stderr
-			stdout, err := cmd[len(cmd)-1].StdoutPipe()
-			if err != nil {
-				fmt.Printf("Error creating stdout pipe for %s: %v\n", execConfig.Name, err)
-				cmd = cmd[:len(cmd)-1] // Remove the last command if there's an error
-				continue
-			}
-			stderr, err := cmd[len(cmd)-1].StderrPipe()
-			if err != nil {
-				fmt.Printf("Error creating stderr pipe for %s: %v\n", execConfig.Name, err)
-				cmd = cmd[:len(cmd)-1] // Remove the last command if there's an error
-				continue
-			}
-
-			err = cmd[len(cmd)-1].Start()
-			if err != nil {
-				fmt.Printf("Error starting command for %s (Attempt %d/%d): %v\n", execConfig.Name, attempt, retryCount, err)
-				cmd = cmd[:len(cmd)-1] // Remove the last command if there's an error
-				if attempt == retryCount {
-					fmt.Printf("Failed to execute command for %s after %d attempts\n", execConfig.Name, retryCount)
-				}
-				if attempt < retryCount {
-					fmt.Printf("Retrying command for %s after %v...\n", execConfig.Name, retryDelay)
-					time.Sleep(retryDelay) // Add delay before retrying
-				}
-				continue
-			}
-
-			// Wait for the command to finish with a timeout
-			err = waitWithTimeout(cmd[len(cmd)-1], 2*time.Second)
-			if err != nil {
-				fmt.Printf("Error waiting for command for %s (Attempt %d/%d): %v\n", execConfig.Name, attempt, retryCount, err)
-				if attempt == retryCount {
-					fmt.Printf("Failed to execute command for %s after %d attempts\n", execConfig.Name, retryCount)
-				}
-				if attempt < retryCount {
-					fmt.Printf("Retrying command for %s after %v...\n", execConfig.Name, retryDelay)
-					time.Sleep(retryDelay) // Add delay before retrying
-				}
-				continue
-			}
-
-			go printOutputWithIdentity(stdout, execConfig.Name)
-			go printOutputWithIdentity(stderr, execConfig.Name)
-			break // Exit retry loop on success
-		}
-	}
-	return cmd
 }

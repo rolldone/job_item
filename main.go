@@ -8,8 +8,9 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"runtime"
-	"sync"
+	"os/signal"
+	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -22,11 +23,14 @@ const VERSION_NUMBER = 3
 const VERSION_APP = "v0.1.1"
 
 func main() {
-	var wg sync.WaitGroup
+	// var wg sync.WaitGroup
 	// Check the init cli first is with nested command or not
 	// argsWithoutProg := os.Args[1:]
 	bypass := initCli()
 	if !bypass {
+		// For child process, we need stop here
+		// because the child process will run the command in exec cli.
+		// So we need to stop here.
 		return
 	}
 
@@ -39,15 +43,15 @@ func main() {
 	configYamlSupport := support.Helper.ConfigYaml
 	if configYamlSupport.ConfigData.Job_item_version_number > VERSION_NUMBER {
 		// fmt.Println(configYamlSupport.ConfigData.Job_item_version_number, "::", VERSION_NUMBER)
-		fmt.Println("Download New Version :: ", configYamlSupport.ConfigData.Job_item_link)
+		support.Helper.PrintGroupName("Download New Version :: " + configYamlSupport.ConfigData.Job_item_link)
 		err := configYamlSupport.DownloadNewApp(configYamlSupport.ConfigData.Job_item_version_number)
 		if err != nil {
-			fmt.Println(err)
+			support.Helper.PrintErrName(err.Error())
 			panic(1)
 		}
 	} else {
 		if is_develop {
-			fmt.Println("Is Development")
+			support.Helper.PrintGroupName("You are in development mode, so you can change the code and run it again.")
 		}
 	}
 
@@ -56,10 +60,14 @@ func main() {
 	is_run := true
 
 	run_child <- "start"
-	cmdExecArr := configYamlSupport.RunExecsProcess()
+	cmdExec, err := configYamlSupport.RunChildExecsProcess()
+	if err != nil {
+		support.Helper.PrintErrName("Error starting exec process: " + err.Error())
+		panic(1)
+	}
 	cmd, err := configYamlSupport.RunChildProcess()
 	if err != nil {
-		fmt.Println(err)
+		support.Helper.PrintErrName("Error starting child process: " + err.Error())
 		panic(1)
 	}
 
@@ -67,7 +75,7 @@ func main() {
 	restartProcess := func() {
 		watcher, err := fsnotify.NewWatcher()
 		if err != nil {
-			log.Fatal(err)
+			support.Helper.PrintErrName("Error creating file watcher: " + err.Error())
 		}
 		defer watcher.Close()
 
@@ -84,25 +92,14 @@ func main() {
 				if !ok {
 					return
 				}
-				log.Println("event:", event)
-				log.Println("modified file:", event.Name)
-				err := cmd.Process.Kill()
-				if err != nil {
-					fmt.Println(err)
-					panic(1)
-				}
-				for _, cmdExec := range cmdExecArr {
-					// Find the process by PID
-					err := cmdExec.Process.Kill()
-					if err != nil {
-						fmt.Println("Error kill process:", err)
-					}
-					cmdExec = nil
-				}
-				cmdExecArr = []*exec.Cmd{}
+				support.Helper.PrintGroupName("event: " + event.String())
+				support.Helper.PrintGroupName("modified file: " + event.Name)
+				configYamlSupport.CloseAllGroupProcesses([]*exec.Cmd{cmd, cmdExec})
 				cmd = nil
+				cmdExec = nil
+				time.Sleep(3 * time.Second) // Wait for 3 seconds before restarting
 				run_child <- "restart"
-				fmt.Println("Restart child process")
+				support.Helper.PrintGroupName("Restart child process")
 				is_done_watch = true
 			case err, ok := <-watcher.Errors:
 				if !ok {
@@ -117,48 +114,51 @@ func main() {
 
 	hostInfo, err := support.Helper.HardwareInfo.GetInfoHardware()
 	if err != nil {
-		fmt.Println("err :: ", err)
+		support.Helper.PrintErrName("Error getting hardware info: " + err.Error())
 		panic(1)
 	}
-	fmt.Println("----------------------------------------------------")
-	fmt.Println("Hardware Identification")
-	fmt.Println("----------------------------------------------------")
-	fmt.Println("hostID :: ", hostInfo.HostID)
-	fmt.Println("hostname :: ", hostInfo.Hostname)
-	fmt.Println("os :: ", hostInfo.OS)
-	fmt.Println("platform :: ", hostInfo.Platform)
-	fmt.Println("kernelArch :: ", hostInfo.KernelArch)
-	fmt.Println("kernelVersion :: ", hostInfo.KernelVersion)
-	fmt.Println("----------------------------------------------------")
+	support.Helper.PrintGroupName("----------------------------------------------------")
+	support.Helper.PrintGroupName("Hardware Identification")
+	support.Helper.PrintGroupName("hostID :: " + hostInfo.HostID)
+	support.Helper.PrintGroupName("hostname :: " + hostInfo.Hostname)
+	support.Helper.PrintGroupName("os :: " + hostInfo.OS)
+	support.Helper.PrintGroupName("platform :: " + hostInfo.Platform)
+	support.Helper.PrintGroupName("kernelArch :: " + hostInfo.KernelArch)
+	support.Helper.PrintGroupName("kernelVersion :: " + hostInfo.KernelVersion)
+	support.Helper.PrintGroupName("----------------------------------------------------")
+
+	// Listen interupt signal
+	signalChan := make(chan os.Signal, 1)
+	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		for sig := range signalChan {
+			support.Helper.PrintGroupName("Received signal: " + sig.String())
+			configYamlSupport.CloseAllGroupProcesses([]*exec.Cmd{cmd, cmdExec})
+			os.Exit(0)
+		}
+	}()
 
 	for is_run {
 		gg := <-run_child
 		switch gg {
 		case "start":
-			wg.Add(1)
-			go func() {
-				defer func() {
-					wg.Done()
-				}()
-				err = cmd.Wait()
-				if err != nil {
-					fmt.Println("The command get : ", err)
-				}
-			}()
-			wg.Wait() // Wait for all goroutines to finish
-			fmt.Println("Exiting job_item process")
+			support.Helper.PrintGroupName("Starting job_item process")
 		case "restart":
 			cmd, err = configYamlSupport.RunChildProcess()
+			if err != nil {
+				support.Helper.PrintErrName("Error starting child process: " + err.Error())
+				panic(1)
+			}
+			cmdExec, err = configYamlSupport.RunChildExecsProcess()
 			if err != nil {
 				fmt.Println(err)
 				panic(1)
 			}
-			cmdExecArr = configYamlSupport.RunExecsProcess()
-
-			run_child <- "start"
 			go restartProcess()
+			run_child <- "start"
 		default:
-			fmt.Println("Nothing to do")
+			support.Helper.PrintGroupName("Nothing to do")
 			is_run = false
 		}
 	}
@@ -171,7 +171,7 @@ func tryRestartProcess(waitingRecursive int, callback func() bool) {
 		if !retryConn {
 			break
 		}
-		fmt.Println("Try restart connection in 5 seconds")
+		support.Helper.PrintGroupName("Try restart connection in 5 seconds")
 		time.Sleep(time.Duration(time.Second) * time.Duration(waitingRecursive))
 	}
 }
@@ -200,18 +200,21 @@ func initCli() bool {
 		// This is without nested command
 		// Example job_item --config=/var/www/html/config.yaml
 		Action: func(ctx *cli.Context) error {
-			supportSupport := support.SupportConstruct()
+			supportSupport := support.SupportConstruct("Main")
 
 			// Retry post data to get authentication from server
 			var configYamlSupport *support.ConfigYamlSupport
 			retryRequest := true
 			for retryRequest {
-				confItem, err := support.ConfigYamlSupportContruct(ctx.String("config"))
+				confItem, err := support.ConfigYamlSupportContruct(support.ConfigYamlSupportConstructPropsType{
+					RequestToServer: false,
+					Config_path:     ctx.String("config"),
+				})
 				configYamlSupport = confItem
 				if err != nil {
 					retryRequest = true
 					time.Sleep(time.Duration(time.Second) * 5)
-					fmt.Println("Retry connection")
+					support.Helper.PrintGroupName("Retry connection")
 					continue
 				}
 				retryRequest = false
@@ -229,8 +232,9 @@ func initCli() bool {
 				// Aliases: []string{"c"},
 				Usage: "options for config",
 				Action: func(ctx *cli.Context) error {
-					// var cmds []*exec.Cmd
-					supportSupport := support.SupportConstruct()
+					flag = "child_process"
+
+					supportSupport := support.SupportConstruct("Child")
 
 					brokerConnectionSupport := support.BrokerConnectionSupportContruct()
 
@@ -238,12 +242,15 @@ func initCli() bool {
 					var configYamlSupport *support.ConfigYamlSupport
 					retryRequest := true
 					for retryRequest {
-						_configYamlSupport, err := support.ConfigYamlSupportContruct(ctx.String("config"))
+						_configYamlSupport, err := support.ConfigYamlSupportContruct(support.ConfigYamlSupportConstructPropsType{
+							RequestToServer: true,
+							Config_path:     ctx.String("config"),
+						})
 						configYamlSupport = _configYamlSupport
 						if err != nil {
 							retryRequest = true
 							time.Sleep(time.Duration(time.Second) * 5)
-							fmt.Println("Retry connection")
+							support.Helper.PrintGroupName("Retry connection")
 							continue
 						}
 						retryRequest = false
@@ -257,7 +264,7 @@ func initCli() bool {
 					harwareInfoSuppport := support.HardwareInfoSupportConstruct()
 					supportSupport.Register(harwareInfoSuppport)
 
-					fmt.Println("configYamlSupport", configYamlSupport.ConfigData.Broker_connection)
+					support.Helper.PrintGroupName("configYamlSupport: " + fmt.Sprintf("%v", configYamlSupport.ConfigData.Broker_connection))
 
 					currentConnection := configYamlSupport.ConfigData.Broker_connection
 					switch currentConnection["type"].(string) {
@@ -325,7 +332,7 @@ func initCli() bool {
 						postOwnInfoEvent.ListenInfoUsage(brokCon["key"].(string))
 					}
 
-					fmt.Println("Job Item is running :)")
+					supportSupport.PrintGroupName("Job Item is running :)")
 
 					// This function listens for the "job_item_restart" event on the event bus.
 					// When the event is triggered, it attempts to save the current configuration file (config.yaml)
@@ -334,15 +341,15 @@ func initCli() bool {
 					restartProcessFromEventBus := func() {
 						eventBusSupport := support.Helper.EventBus
 						err := eventBusSupport.GetBus().SubscribeOnce("job_item_restart", func(data interface{}) {
-							fmt.Println("Restart child process from event bus")
+							support.Helper.PrintGroupName("Restart child process from event bus")
 							err := saveWithoutChange(support.Helper.ConfigYaml.Config_path)
 							if err != nil {
-								fmt.Printf("ERROR: %v\n", err)
+								support.Helper.PrintErrName("ERROR: " + err.Error())
 								// Handle the error appropriately
 							}
 						})
 						if err != nil {
-							fmt.Println("Error subscribing to job_item_restart event:", err)
+							support.Helper.PrintErrName("Error subscribing to job_item_restart event: " + err.Error())
 							return
 						}
 					}
@@ -353,7 +360,53 @@ func initCli() bool {
 					ginSupport := support.GinConstruct()
 					supportSupport.Register(ginSupport)
 
-					runtime.Goexit()
+					// --- Signal Handling ---
+					sigs := make(chan os.Signal, 1)
+					signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+					<-sigs
+					support.Helper.PrintGroupName("Received signal, shutting down gracefully...")
+					return nil
+				},
+			},
+			{
+				Flags: flagConfig,
+				Name:  "child_execs_process",
+				// Aliases: []string{"e"},
+				Usage: "run execs process",
+				Action: func(ctx *cli.Context) error {
+					flag = "child_execs_process"
+					supportSupport := support.SupportConstruct("Exec")
+					// Initialize without request to server
+					configYamlSupport, err := support.ConfigYamlSupportContruct(support.ConfigYamlSupportConstructPropsType{
+						RequestToServer: false,
+						Config_path:     ctx.String("config"),
+					})
+					if err != nil {
+						support.Helper.PrintErrName("Error initializing config yaml support: " + err.Error())
+						return err
+					}
+
+					supportSupport.Register(configYamlSupport)
+
+					cmdExecArr := configYamlSupport.RunExecsProcess()
+					if len(cmdExecArr) == 0 {
+						fmt.Println("Nothing to do")
+						return nil
+					}
+
+					// Start Listening for signals to gracefully shut down the process
+					sigCh := make(chan os.Signal, 1)
+					// Notify the sigCh channel for SIGINT and SIGTERM signals
+					signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+					// Block until a signal is received
+					sig := <-sigCh
+					support.Helper.PrintGroupName(fmt.Sprintf("Received signal: %v\n", sig))
+					for _, cmdExec := range cmdExecArr {
+						support.Helper.PrintGroupName("PID Exec: " + strconv.Itoa(cmdExec.Process.Pid))
+						// Kirim SIGTERM
+						configYamlSupport.CloseAllGroupProcesses([]*exec.Cmd{cmdExec})
+					}
+
 					return nil
 				},
 			},
@@ -363,7 +416,6 @@ func initCli() bool {
 	if err := app.Run(os.Args); err != nil {
 		log.Fatal(err)
 	}
-
 	// It mean bypass
 	return flag == ""
 }

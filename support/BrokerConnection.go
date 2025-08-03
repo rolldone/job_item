@@ -1,7 +1,5 @@
 package support
 
-import "fmt"
-
 type SubSyncOpts struct {
 	Timeout_second int
 }
@@ -40,7 +38,7 @@ func (c *BrokerConnectionSupport) RegisterConnection(key string, conn BrokerConn
 func (c *BrokerConnectionSupport) GetConnection(key string) BrokerConnectionInterface {
 	for _, v := range c.conn_arr {
 		if (*v).GetKey_P() == key {
-			fmt.Println("GetConnection :: ", (*v).GetKey_P(), " == ", key)
+			Helper.PrintGroupName("GetConnection :: " + (*v).GetKey_P() + " == " + key)
 			return (*v).GetBroker_P().(BrokerConnectionInterface)
 		}
 	}

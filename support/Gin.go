@@ -18,7 +18,7 @@ func GinConstruct() *GinSupport {
 	ginSupport.StartBaseRoute()
 	// Wait briefly to ensure the goroutine has started and port is set
 	time.Sleep(100 * time.Millisecond)
-	println("Web server started localhost with port", ginSupport.GetPort())
+	Helper.PrintGroupName("Web server started localhost with port: " + fmt.Sprintf("%d", ginSupport.GetPort()))
 	return &ginSupport
 }
 
@@ -38,6 +38,9 @@ func (c *GinSupport) GetObject() any {
 }
 
 func (g *GinSupport) StartBaseRoute() {
+
+	// Set Gin to release mode for production
+	gin.SetMode(gin.ReleaseMode)
 
 	// Initialize Gin's default router.
 	g.router = gin.Default()

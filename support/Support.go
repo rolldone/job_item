@@ -8,8 +8,10 @@ import (
 
 var Helper *SupportService
 
-func SupportConstruct() *SupportService {
-	gg := SupportService{}
+func SupportConstruct(segmentApp string) *SupportService {
+	gg := SupportService{
+		Segment_app: segmentApp,
+	}
 	Helper = &gg
 	return &gg
 }
@@ -24,10 +26,19 @@ type SupportService struct {
 	EventBus         *EventBusSupport
 	HardwareInfo     *HardwareInfoSupport
 	Gin              *GinSupport
+	Segment_app      string
+}
+
+func (c *SupportService) PrintGroupName(printText string) {
+	fmt.Println(c.Segment_app, " >> ", printText)
+}
+
+func (c *SupportService) PrintErrName(printText string) {
+	fmt.Println(c.Segment_app, " - ERR >> ", printText)
 }
 
 func (c *SupportService) Register(tt SupportInterface) {
-	fmt.Println("SupportService - Register :: ", reflect.TypeOf(tt.GetObject()))
+	c.PrintGroupName("SupportService - Register :: " + reflect.TypeOf(tt.GetObject()).String())
 	switch tt.GetObject().(type) {
 	case *ConfigYamlSupport:
 		c.ConfigYaml = tt.(*ConfigYamlSupport)
