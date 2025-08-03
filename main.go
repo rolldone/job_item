@@ -95,11 +95,20 @@ func main() {
 				support.Helper.PrintGroupName("event: " + event.String())
 				support.Helper.PrintGroupName("modified file: " + event.Name)
 				configYamlSupport.CloseAllGroupProcesses([]*exec.Cmd{cmd, cmdExec})
+				err := cmd.Wait()
+				if err != nil {
+					support.Helper.PrintErrName("Error waiting for child command: " + err.Error())
+				}
+				err = cmdExec.Wait()
+				if err != nil {
+					support.Helper.PrintErrName("Error waiting for exec command: " + err.Error())
+				}
+				time.Sleep(3 * time.Second) // Wait for 3 seconds before restarting
 				cmd = nil
 				cmdExec = nil
+				support.Helper.PrintGroupName("Restart child process...")
 				time.Sleep(3 * time.Second) // Wait for 3 seconds before restarting
 				run_child <- "restart"
-				support.Helper.PrintGroupName("Restart child process")
 				is_done_watch = true
 			case err, ok := <-watcher.Errors:
 				if !ok {
@@ -135,6 +144,14 @@ func main() {
 		for sig := range signalChan {
 			support.Helper.PrintGroupName("Received signal: " + sig.String())
 			configYamlSupport.CloseAllGroupProcesses([]*exec.Cmd{cmd, cmdExec})
+			err := cmd.Wait()
+			if err != nil {
+				support.Helper.PrintErrName("Error waiting for child command: " + err.Error())
+			}
+			err = cmdExec.Wait()
+			if err != nil {
+				support.Helper.PrintErrName("Error waiting for exec command: " + err.Error())
+			}
 			os.Exit(0)
 		}
 	}()
@@ -395,18 +412,15 @@ func initCli() bool {
 					}
 
 					// Start Listening for signals to gracefully shut down the process
-					sigCh := make(chan os.Signal, 1)
-					// Notify the sigCh channel for SIGINT and SIGTERM signals
-					signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-					// Block until a signal is received
-					sig := <-sigCh
-					support.Helper.PrintGroupName(fmt.Sprintf("Received signal: %v\n", sig))
+					sig := make(chan os.Signal, 1)
+					signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+					<-sig
+					support.Helper.PrintGroupName("Received signal, shutting down gracefully... ")
 					for _, cmdExec := range cmdExecArr {
 						support.Helper.PrintGroupName("PID Exec: " + strconv.Itoa(cmdExec.Process.Pid))
 						// Kirim SIGTERM
 						configYamlSupport.CloseAllGroupProcesses([]*exec.Cmd{cmdExec})
 					}
-
 					return nil
 				},
 			},
