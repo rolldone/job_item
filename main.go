@@ -99,7 +99,7 @@ func main() {
 				// For cmd is not have child process, so we only wait cmdExec for it
 				err = cmdExec.Wait()
 				if err != nil {
-					support.Helper.PrintErrName("Error waiting for exec command: " + err.Error())
+					support.Helper.PrintErrName("Waiting for exec command : " + err.Error())
 				}
 				time.Sleep(3 * time.Second) // Wait for 3 seconds before restarting
 				cmd = nil
@@ -145,7 +145,7 @@ func main() {
 			// For cmd is not have child process, so we only wait cmdExec for it
 			err = cmdExec.Wait()
 			if err != nil {
-				support.Helper.PrintErrName("Error waiting for exec command: " + err.Error())
+				support.Helper.PrintErrName("Waiting for exec command : " + err.Error())
 			}
 			os.Exit(0)
 		}
