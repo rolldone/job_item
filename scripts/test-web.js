@@ -41,7 +41,7 @@ const killPreviousProcess = async () => {
 };
 
 // Kill the previous process if it exists
-await killPreviousProcess();
+// await killPreviousProcess();
 
 // Start the server on a fixed port 7000
 const port = 2000;
