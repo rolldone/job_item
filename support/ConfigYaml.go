@@ -73,6 +73,10 @@ type RedisBrokerConnection struct {
 	Port     int    `yaml:"port"`
 	Password string `yaml:"password"`
 	Db       int    `yaml:"db"`
+	Secure   bool   `yaml:"secure"`
+	CAFile   string `yaml:"ca_file"`
+	CertFile string `yaml:"cert_file"`
+	KeyFile  string `yaml:"key_file"`
 }
 
 func (c RedisBrokerConnection) GetConnection() any {
@@ -447,6 +451,26 @@ func (c *ConfigYamlSupport) GetTypeBrokerCon(v map[string]interface{}) BrokerCon
 		} else {
 			fmt.Println("REDIS ERR : You need define db")
 			panic(1)
+		}
+		// Parse TLS/mTLS fields
+		if v["secure"] != nil {
+			switch val := v["secure"].(type) {
+			case bool:
+				redisConf.Secure = val
+			case float64:
+				redisConf.Secure = val != 0
+			case string:
+				redisConf.Secure = val == "true" || val == "1"
+			}
+		}
+		if v["ca_file"] != nil {
+			redisConf.CAFile = v["ca_file"].(string)
+		}
+		if v["cert_file"] != nil {
+			redisConf.CertFile = v["cert_file"].(string)
+		}
+		if v["key_file"] != nil {
+			redisConf.KeyFile = v["key_file"].(string)
 		}
 		return redisConf
 	}
