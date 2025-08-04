@@ -1,10 +1,17 @@
 package support
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
+	"os"
 	"strconv"
 	"time"
+
+	"path/filepath"
 
 	nats "github.com/nats-io/nats.go"
 )
@@ -32,6 +39,43 @@ type NatsSupport struct {
 	key         string
 }
 
+func DownloadCAFile(endpoint, caFilePath, appID, appSecret string) error {
+	// Ensure 'tls' directory exists
+	dir := filepath.Dir(caFilePath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	// Check if file exists
+	if _, err := os.Stat(caFilePath); err == nil {
+		return nil // File exists, nothing to do
+	}
+	// Prepare JSON body
+	body := map[string]string{
+		"app_id":     appID,
+		"app_secret": appSecret,
+	}
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+	// Download CA file
+	resp, err := http.Post(endpoint, "application/json", bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("failed to download CA file: status %d", resp.StatusCode)
+	}
+	out, err := os.Create(caFilePath)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, resp.Body)
+	return err
+}
+
 func (c *NatsSupport) ConnectPubSub() error {
 	natsHost := c.natConfInfo.Host
 	natsPort := c.natConfInfo.Port
@@ -52,22 +96,42 @@ func (c *NatsSupport) ConnectPubSub() error {
 	}
 	fmt.Println("Nats Connection inf :: ", url)
 
+	// Build connection options
+	var opts []nats.Option
+	opts = append(opts,
+		nats.MaxReconnects(-1),
+		nats.ReconnectWait(5*time.Second),
+		nats.ReconnectHandler(func(nc *nats.Conn) {
+			fmt.Println("Reconnected to NATS server:", nc.ConnectedUrl())
+		}),
+		nats.DisconnectHandler(func(nc *nats.Conn) {
+			fmt.Println("Disconnected from NATS server, attempting to reconnect...")
+		}),
+		nats.ClosedHandler(func(nc *nats.Conn) {
+			fmt.Println("Connection to NATS server closed, attempting to reconnect...")
+		}),
+	)
+	// Add TLS option if Secure is true
+	if c.natConfInfo.Secure {
+		if c.natConfInfo.CAFile == "" {
+			return fmt.Errorf("NATS TLS enabled but ca_file is missing in config")
+		}
+		// Build CA download endpoint from config endPoint
+		caDownloadEndpoint := fmt.Sprintf("%s/api/worker/config/tls/download", Helper.ConfigYaml.ConfigData.End_point)
+		appID := Helper.ConfigYaml.ConfigData.Credential.Project_id
+		appSecret := Helper.ConfigYaml.ConfigData.Credential.Secret_key
+		err := DownloadCAFile(caDownloadEndpoint, c.natConfInfo.CAFile, appID, appSecret)
+		if err != nil {
+			return fmt.Errorf("failed to download CA file: %v", err)
+		}
+		opts = append(opts, nats.RootCAs(c.natConfInfo.CAFile))
+		fmt.Println("NATS TLS enabled. Using CA file:", c.natConfInfo.CAFile)
+	}
+
 	// Retry mechanism
 	var err error
 	for {
-		nc, connErr := nats.Connect(url,
-			nats.MaxReconnects(-1),
-			nats.ReconnectWait(5*time.Second),
-			nats.ReconnectHandler(func(nc *nats.Conn) {
-				fmt.Println("Reconnected to NATS server:", nc.ConnectedUrl())
-			}),
-			nats.DisconnectHandler(func(nc *nats.Conn) {
-				fmt.Println("Disconnected from NATS server, attempting to reconnect...")
-			}),
-			nats.ClosedHandler(func(nc *nats.Conn) {
-				fmt.Println("Connection to NATS server closed, attempting to reconnect...")
-			}),
-		)
+		nc, connErr := nats.Connect(url, opts...)
 		if connErr == nil {
 			c.nc = nc
 			err = connErr

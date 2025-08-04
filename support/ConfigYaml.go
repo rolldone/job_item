@@ -42,6 +42,8 @@ type NatsBrokerConnection struct {
 	User      string `yaml:"user"`
 	Password  string `yaml:"password"`
 	Token     string `yaml:"token"`
+	Secure    bool   `yaml:"secure"`
+	CAFile    string `yaml:"ca_file"`
 }
 
 func (c NatsBrokerConnection) GetConnection() any {
@@ -387,7 +389,6 @@ func (c *ConfigYamlSupport) GetTypeBrokerCon(v map[string]interface{}) BrokerCon
 		natsConf.Name = v["name"].(string)
 		natsConf.Port = int(v["port"].(float64))
 		natsConf.Type = v["type"].(string)
-		natsConf.Type = v["type"].(string)
 		if v["auth_type"] != nil {
 			natsConf.Auth_type = v["auth_type"].(string)
 		} else {
@@ -402,6 +403,20 @@ func (c *ConfigYamlSupport) GetTypeBrokerCon(v map[string]interface{}) BrokerCon
 		}
 		if v["token"] != nil {
 			natsConf.Token = v["token"].(string)
+		}
+		// Parse TLS fields
+		if v["secure"] != nil {
+			switch val := v["secure"].(type) {
+			case bool:
+				natsConf.Secure = val
+			case float64:
+				natsConf.Secure = val != 0
+			case string:
+				natsConf.Secure = val == "true" || val == "1"
+			}
+		}
+		if v["ca_file"] != nil {
+			natsConf.CAFile = v["ca_file"].(string)
 		}
 		return natsConf
 	case "rabbitmq":
