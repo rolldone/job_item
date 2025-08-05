@@ -651,8 +651,7 @@ func (c ConfigYamlSupport) GetRedisBrokerCon(gg BrokerConInterface) RedisBrokerC
 
 // RunExecsProcess runs all exec commands defined in the configuration.
 // It captures their output, retries on failure, and handles timeouts.
-func (c *ConfigYamlSupport) RunExecsProcess() []*exec.Cmd {
-	var cmd []*exec.Cmd
+func (c *ConfigYamlSupport) RunExecsProcess(cmd *[]*exec.Cmd) {
 	retryCount := 5               // Number of retry attempts
 	retryDelay := 2 * time.Second // Delay between retries
 
@@ -671,12 +670,12 @@ func (c *ConfigYamlSupport) RunExecsProcess() []*exec.Cmd {
 
 			// Create the command
 			cmdItem := NewMonitoredCmd(createIndependentCommand(execConfig, workingDir))
-			cmd = append(cmd, cmdItem.Cmd)
+			*cmd = append(*cmd, cmdItem.Cmd)
 
 			// Use the helper function to set up pipes
 			stdout, stderr, err := setupCommandPipes(cmdItem.Cmd, execConfig.Name)
 			if err != nil {
-				cmd = cmd[:len(cmd)-1] // Remove the last command if there's an error
+				*cmd = (*cmd)[:len(*cmd)-1] // Remove the last command if there's an error
 				continue
 			}
 
@@ -688,7 +687,7 @@ func (c *ConfigYamlSupport) RunExecsProcess() []*exec.Cmd {
 			err = cmdItem.Cmd.Start()
 			if err != nil {
 				Helper.PrintErrName(fmt.Sprintf("Error starting command for %s (Attempt %d/%d): %v\n", execConfig.Name, attempt, retryCount, err), "ERR-CMD-START")
-				cmd = cmd[:len(cmd)-1] // Remove the last command if there's an error
+				*cmd = (*cmd)[:len(*cmd)-1] // Remove the last command if there's an error
 				if attempt == retryCount {
 					Helper.PrintErrName(fmt.Sprintf("Failed to execute command for %s after %d attempts\n", execConfig.Name, retryCount), "ERR-CMD-FAIL")
 				}
@@ -707,9 +706,9 @@ func (c *ConfigYamlSupport) RunExecsProcess() []*exec.Cmd {
 				for restartAttempt := 0; restartAttempt < restartAttempts; restartAttempt++ {
 					err := cmdItem.Wait()
 					if err != nil {
-						for in, c := range cmd {
+						for in, c := range *cmd {
 							if c.Process.Pid == cmdItem.Cmd.Process.Pid {
-								cmd = cmd[:in] // Remove the last command if there's an error
+								*cmd = (*cmd)[:in] // Remove the last command if there's an error
 								break
 							}
 						}
@@ -721,7 +720,7 @@ func (c *ConfigYamlSupport) RunExecsProcess() []*exec.Cmd {
 
 						stdout, stderr, err := setupCommandPipes(cmdItem.Cmd, execConfig.Name)
 						if err != nil {
-							cmd = cmd[:len(cmd)-1] // Remove the last command if there's an error
+							*cmd = (*cmd)[:len(*cmd)-1] // Remove the last command if there's an error
 							continue
 						}
 
@@ -730,9 +729,15 @@ func (c *ConfigYamlSupport) RunExecsProcess() []*exec.Cmd {
 						go printOutputWithIdentity(stderr, execConfig.Name)
 
 						cmdItem.Cmd.Start()
-						cmd = append(cmd, cmdItem.Cmd)
+						*cmd = append(*cmd, cmdItem.Cmd)
 					} else {
 						Helper.PrintGroupName(fmt.Sprintf("Command '%s' finished successfully.\n", execName))
+						for in, c := range *cmd {
+							if c.Process.Pid == cmdItem.Cmd.Process.Pid {
+								*cmd = (*cmd)[:in] // Remove the last command if there's an error
+								break
+							}
+						}
 						break
 					}
 				}
@@ -741,7 +746,6 @@ func (c *ConfigYamlSupport) RunExecsProcess() []*exec.Cmd {
 			break // Exit retry loop on success
 		}
 	}
-	return cmd
 }
 
 // monitorCommand listens for when an *exec.Cmd exits, either successfully or with an error.

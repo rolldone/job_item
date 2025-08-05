@@ -411,8 +411,8 @@ func initCli() bool {
 					}
 
 					supportSupport.Register(configYamlSupport)
-
-					cmdExecArr := configYamlSupport.RunExecsProcess()
+					var cmdExecArr []*exec.Cmd
+					configYamlSupport.RunExecsProcess(&cmdExecArr)
 					if len(cmdExecArr) == 0 {
 						fmt.Println("Nothing to do")
 						return nil
