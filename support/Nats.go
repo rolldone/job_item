@@ -1,17 +1,10 @@
 package support
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
-	"io"
 	"log"
-	"net/http"
-	"os"
 	"strconv"
 	"time"
-
-	"path/filepath"
 
 	nats "github.com/nats-io/nats.go"
 )
@@ -37,43 +30,6 @@ type NatsSupport struct {
 	nc          *nats.Conn
 	natConfInfo NatsBrokerConnection
 	key         string
-}
-
-func DownloadCAFile(endpoint, caFilePath, appID, appSecret string) error {
-	// Ensure 'tls' directory exists
-	dir := filepath.Dir(caFilePath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return err
-	}
-	// Check if file exists
-	if _, err := os.Stat(caFilePath); err == nil {
-		return nil // File exists, nothing to do
-	}
-	// Prepare JSON body
-	body := map[string]string{
-		"app_id":     appID,
-		"app_secret": appSecret,
-	}
-	jsonBody, err := json.Marshal(body)
-	if err != nil {
-		return err
-	}
-	// Download CA file
-	resp, err := http.Post(endpoint, "application/json", bytes.NewBuffer(jsonBody))
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("failed to download CA file: status %d", resp.StatusCode)
-	}
-	out, err := os.Create(caFilePath)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-	_, err = io.Copy(out, resp.Body)
-	return err
 }
 
 func (c *NatsSupport) ConnectPubSub() error {
@@ -116,16 +72,12 @@ func (c *NatsSupport) ConnectPubSub() error {
 		if c.natConfInfo.CAFile == "" {
 			return fmt.Errorf("NATS TLS enabled but ca_file is missing in config")
 		}
-		// Build CA download endpoint from config endPoint
-		caDownloadEndpoint := fmt.Sprintf("%s/api/worker/config/tls/download", Helper.ConfigYaml.ConfigData.End_point)
-		appID := Helper.ConfigYaml.ConfigData.Credential.Project_id
-		appSecret := Helper.ConfigYaml.ConfigData.Credential.Secret_key
-		err := DownloadCAFile(caDownloadEndpoint, c.natConfInfo.CAFile, appID, appSecret)
-		if err != nil {
-			return fmt.Errorf("failed to download CA file: %v", err)
-		}
 		opts = append(opts, nats.RootCAs(c.natConfInfo.CAFile))
 		fmt.Println("NATS TLS enabled. Using CA file:", c.natConfInfo.CAFile)
+	}
+	if c.natConfInfo.CertFile != "" && c.natConfInfo.KeyFile != "" {
+		opts = append(opts, nats.ClientCert(c.natConfInfo.CertFile, c.natConfInfo.KeyFile))
+		fmt.Println("NATS mTLS enabled. Using client cert and key:", c.natConfInfo.CertFile, c.natConfInfo.KeyFile)
 	}
 
 	// Retry mechanism

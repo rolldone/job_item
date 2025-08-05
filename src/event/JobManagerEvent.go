@@ -100,41 +100,53 @@ func (c *JobManagerEvent) ListenEvent(conn_name string) {
 		job_datas := support.Helper.ConfigYaml.ConfigData.Project.Job_datas
 		jobs := support.Helper.ConfigYaml.ConfigData.Jobs
 		unsubcribes := []func(){}
-		// Merged logic: for each job, check both top-level and nested job events
-		for _, v := range jobs {
-			jobConfig := v
-			isMatch := false
-			for _, x := range job_datas {
-				// Check top-level event
-				if x.Event == v.Event {
-					isMatch = true
-					sub_key := fmt.Sprint(project_app_uuid, ".", v.Event)
-					unsub, err := subscribeAndRunJobEvent(conn, sub_key, jobConfig.Cmd, project_app_uuid, c)
-					_ = append(unsubcribes, unsub)
-					if err != nil {
-						log.Println(err)
-					}
+		if support.Helper.ConfigYaml.ConfigData.End_point == "" {
+			for _, v := range jobs {
+				jobConfig := v
+				sub_key := fmt.Sprint(project_app_uuid, ".", v.Event)
+				unsub, err := subscribeAndRunJobEvent(conn, sub_key, jobConfig.Cmd, project_app_uuid, c)
+				_ = append(unsubcribes, unsub)
+				if err != nil {
+					log.Println(err)
 				}
-				// Check nested events
-				if x.Nested_jobs != nil {
-					for _, nested := range *x.Nested_jobs {
-						nestedEvent := fmt.Sprint(x.Event, ".", nested.Event)
-						if nestedEvent == v.Event {
-							isMatch = true
-							sub_key := fmt.Sprint(project_app_uuid, ".", nestedEvent)
-							unsub, err := subscribeAndRunJobEvent(conn, sub_key, jobConfig.Cmd, project_app_uuid, c)
-							_ = append(unsubcribes, unsub)
-							if err != nil {
-								log.Println(err)
+			}
+		} else {
+			// Merged logic: for each job, check both top-level and nested job events
+			for _, v := range jobs {
+				jobConfig := v
+				isMatch := false
+				for _, x := range job_datas {
+					// Check top-level event
+					if x.Event == v.Event {
+						isMatch = true
+						sub_key := fmt.Sprint(project_app_uuid, ".", v.Event)
+						unsub, err := subscribeAndRunJobEvent(conn, sub_key, jobConfig.Cmd, project_app_uuid, c)
+						_ = append(unsubcribes, unsub)
+						if err != nil {
+							log.Println(err)
+						}
+					}
+					// Check nested events
+					if x.Nested_jobs != nil {
+						for _, nested := range *x.Nested_jobs {
+							nestedEvent := fmt.Sprint(x.Event, ".", nested.Event)
+							if nestedEvent == v.Event {
+								isMatch = true
+								sub_key := fmt.Sprint(project_app_uuid, ".", nestedEvent)
+								unsub, err := subscribeAndRunJobEvent(conn, sub_key, jobConfig.Cmd, project_app_uuid, c)
+								_ = append(unsubcribes, unsub)
+								if err != nil {
+									log.Println(err)
+								}
 							}
 						}
 					}
 				}
-			}
-			if !isMatch {
-				fmt.Println("Event :", v.Event, " not register yet. Please check on job manager with app project that you register it.")
-			}
+				if !isMatch {
+					fmt.Println("Event :", v.Event, " not register yet. Please check on job manager with app project that you register it.")
+				}
 
+			}
 		}
 		// Subscribe to the "restart" event for the current project application UUID.
 		// When the event is triggered, it publishes a "job_item_restart" event to the event bus.

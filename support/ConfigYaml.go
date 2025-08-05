@@ -10,6 +10,7 @@
 package support
 
 import (
+	"archive/zip"
 	"bufio"
 	"bytes"
 	"encoding/json"
@@ -44,6 +45,8 @@ type NatsBrokerConnection struct {
 	Token     string `yaml:"token"`
 	Secure    bool   `yaml:"secure"`
 	CAFile    string `yaml:"ca_file"`
+	CertFile  string `yaml:"cert_file"`
+	KeyFile   string `yaml:"key_file"`
 }
 
 func (c NatsBrokerConnection) GetConnection() any {
@@ -59,6 +62,10 @@ type AMQP_BrokerConnection struct {
 	User     string `yaml:"user"`
 	Password string `yaml:"password"`
 	Exchange string `yaml:"exchange"`
+	Secure   bool   `yaml:"secure"`
+	CAFile   string `yaml:"ca_file"`
+	CertFile string `yaml:"cert_file"`
+	KeyFile  string `yaml:"key_file"`
 }
 
 func (c AMQP_BrokerConnection) GetConnection() any {
@@ -161,8 +168,13 @@ func ConfigYamlSupportContruct(props ConfigYamlSupportConstructPropsType) (*Conf
 				return nil, err
 			}
 		} else {
-			fmt.Println("WARNING: End point is not set, using local config only")
+			gg.printGroupName("WARNING: End point is not set, using local config only")
+			// If not requesting from server, set Uuid to Project_id
+			gg.ConfigData.Uuid = gg.ConfigData.Credential.Project_id
 		}
+	} else {
+		// If not requesting from server, set Uuid to Project_id
+		gg.ConfigData.Uuid = gg.ConfigData.Credential.Project_id
 	}
 	return &gg, nil
 }
@@ -383,6 +395,70 @@ func printOutputWithIdentity(reader io.Reader, identity string) {
 	}
 }
 
+// DownloadAndExtractCerts downloads a zip file from the backend and extracts it to the given directory.
+func (c *ConfigYamlSupport) DownloadAndExtractCerts(endpoint, destDir, appID, appSecret string) error {
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		return err
+	}
+
+	// Prepare JSON body
+	body := map[string]string{
+		"app_id":     appID,
+		"app_secret": appSecret,
+	}
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+
+	resp, err := http.Post(endpoint, "application/json", bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("failed to download certs zip: status %d", resp.StatusCode)
+	}
+
+	// Read zip into memory
+	zipBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	zipReader, err := zip.NewReader(bytes.NewReader(zipBytes), int64(len(zipBytes)))
+	if err != nil {
+		return err
+	}
+
+	// Extract files from zip
+	for _, f := range zipReader.File {
+		outPath := filepath.Join(destDir, f.Name)
+		if f.FileInfo().IsDir() {
+			os.MkdirAll(outPath, 0755)
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
+			return err
+		}
+		outFile, err := os.Create(outPath)
+		if err != nil {
+			return err
+		}
+		inFile, err := f.Open()
+		if err != nil {
+			outFile.Close()
+			return err
+		}
+		_, err = io.Copy(outFile, inFile)
+		inFile.Close()
+		outFile.Close()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // GetTypeBrokerCon returns the appropriate broker connection type based on the provided configuration.
 func (c *ConfigYamlSupport) GetTypeBrokerCon(v map[string]interface{}) BrokerConInterface {
 	switch v["type"].(string) {
@@ -391,7 +467,14 @@ func (c *ConfigYamlSupport) GetTypeBrokerCon(v map[string]interface{}) BrokerCon
 		natsConf.Host = v["host"].(string)
 		natsConf.Key = v["key"].(string)
 		natsConf.Name = v["name"].(string)
-		natsConf.Port = int(v["port"].(float64))
+		switch port := v["port"].(type) {
+		case int:
+			natsConf.Port = port
+		case float64:
+			natsConf.Port = int(port)
+		default:
+			panic(fmt.Sprintf("unexpected type for port: %T", port))
+		}
 		natsConf.Type = v["type"].(string)
 		if v["auth_type"] != nil {
 			natsConf.Auth_type = v["auth_type"].(string)
@@ -422,23 +505,80 @@ func (c *ConfigYamlSupport) GetTypeBrokerCon(v map[string]interface{}) BrokerCon
 		if v["ca_file"] != nil {
 			natsConf.CAFile = v["ca_file"].(string)
 		}
+		if v["cert_file"] != nil {
+			natsConf.CertFile = v["cert_file"].(string)
+		}
+		if v["key_file"] != nil {
+			natsConf.KeyFile = v["key_file"].(string)
+		}
+		if Helper.ConfigYaml.ConfigData.End_point != "" && natsConf.Secure && natsConf.CAFile != "" {
+			certDir := filepath.Dir(natsConf.CAFile)
+			endpoint := fmt.Sprintf("%s/api/worker/config/tls/download", c.ConfigData.End_point)
+			if err := c.DownloadAndExtractCerts(endpoint, certDir, c.ConfigData.Credential.Project_id, c.ConfigData.Credential.Secret_key); err != nil {
+				panic(err)
+			}
+		}
 		return natsConf
 	case "rabbitmq":
 		rabbitmqConf := AMQP_BrokerConnection{}
 		rabbitmqConf.Host = v["host"].(string)
 		rabbitmqConf.Key = v["key"].(string)
 		rabbitmqConf.Name = v["name"].(string)
-		rabbitmqConf.Port = int(v["port"].(float64))
+		switch port := v["port"].(type) {
+		case int:
+			rabbitmqConf.Port = port
+		case float64:
+			rabbitmqConf.Port = int(port)
+		default:
+			panic(fmt.Sprintf("unexpected type for port: %T", port))
+		}
 		rabbitmqConf.Type = v["type"].(string)
 		rabbitmqConf.User = v["user"].(string)
 		rabbitmqConf.Password = v["password"].(string)
+		if v["exchange"] != nil {
+			rabbitmqConf.Exchange = v["exchange"].(string)
+		}
+		// Parse TLS/mTLS fields
+		if v["secure"] != nil {
+			switch val := v["secure"].(type) {
+			case bool:
+				rabbitmqConf.Secure = val
+			case float64:
+				rabbitmqConf.Secure = val != 0
+			case string:
+				rabbitmqConf.Secure = val == "true" || val == "1"
+			}
+		}
+		if v["ca_file"] != nil {
+			rabbitmqConf.CAFile = v["ca_file"].(string)
+		}
+		if v["cert_file"] != nil {
+			rabbitmqConf.CertFile = v["cert_file"].(string)
+		}
+		if v["key_file"] != nil {
+			rabbitmqConf.KeyFile = v["key_file"].(string)
+		}
+		if Helper.ConfigYaml.ConfigData.End_point != "" && rabbitmqConf.Secure && rabbitmqConf.CAFile != "" {
+			certDir := filepath.Dir(rabbitmqConf.CAFile)
+			endpoint := fmt.Sprintf("%s/api/worker/config/tls/download", c.ConfigData.End_point)
+			if err := c.DownloadAndExtractCerts(endpoint, certDir, c.ConfigData.Credential.Project_id, c.ConfigData.Credential.Secret_key); err != nil {
+				panic(err)
+			}
+		}
 		return rabbitmqConf
 	case "redis":
 		redisConf := RedisBrokerConnection{}
 		redisConf.Host = v["host"].(string)
 		redisConf.Key = v["key"].(string)
 		redisConf.Name = v["name"].(string)
-		redisConf.Port = int(v["port"].(float64))
+		switch port := v["port"].(type) {
+		case int:
+			redisConf.Port = port
+		case float64:
+			redisConf.Port = int(port)
+		default:
+			panic(fmt.Sprintf("unexpected type for port: %T", port))
+		}
 		redisConf.Type = v["type"].(string)
 		if v["password"] != nil {
 			redisConf.Password = v["password"].(string)
@@ -471,6 +611,13 @@ func (c *ConfigYamlSupport) GetTypeBrokerCon(v map[string]interface{}) BrokerCon
 		}
 		if v["key_file"] != nil {
 			redisConf.KeyFile = v["key_file"].(string)
+		}
+		if Helper.ConfigYaml.ConfigData.End_point != "" && redisConf.Secure && redisConf.CAFile != "" {
+			certDir := filepath.Dir(redisConf.CAFile)
+			endpoint := fmt.Sprintf("%s/api/worker/config/tls/download", c.ConfigData.End_point)
+			if err := c.DownloadAndExtractCerts(endpoint, certDir, c.ConfigData.Credential.Project_id, c.ConfigData.Credential.Secret_key); err != nil {
+				panic(err)
+			}
 		}
 		return redisConf
 	}

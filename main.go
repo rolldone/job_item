@@ -276,7 +276,12 @@ func initCli() bool {
 					harwareInfoSuppport := support.HardwareInfoSupportConstruct()
 					supportSupport.Register(harwareInfoSuppport)
 
-					support.Helper.PrintGroupName("configYamlSupport: " + fmt.Sprintf("%v", configYamlSupport.ConfigData.Broker_connection))
+					// Print the broker connection details in a structured format
+					brokerConnection := configYamlSupport.ConfigData.Broker_connection
+					support.Helper.PrintGroupName("Broker Connection Details:")
+					for key, value := range brokerConnection {
+						support.Helper.PrintGroupName(fmt.Sprintf("  %s: %v", key, value))
+					}
 
 					currentConnection := configYamlSupport.ConfigData.Broker_connection
 					switch currentConnection["type"].(string) {
@@ -284,6 +289,7 @@ func initCli() bool {
 						// Load the nats library.
 						// Init nats broker.
 						natsBrokerCon := configYamlSupport.GetNatsBrokerCon(configYamlSupport.GetTypeBrokerCon(currentConnection))
+
 						tryRestartProcess(5, func() bool {
 							natSupport, err := support.NatsSupportConstruct(natsBrokerCon)
 							if err != nil {
@@ -327,21 +333,27 @@ func initCli() bool {
 					case "nats":
 						// Init nats broker.
 						jobManagerEvent.ListenEvent(brokCon["key"].(string))
-						postOwnInfoEvent.ListenInfoHardware(brokCon["key"].(string))
-						postOwnInfoEvent.ListenInfoNetwork(brokCon["key"].(string))
-						postOwnInfoEvent.ListenInfoUsage(brokCon["key"].(string))
+						if support.Helper.ConfigYaml.ConfigData.End_point != "" {
+							postOwnInfoEvent.ListenInfoHardware(brokCon["key"].(string))
+							postOwnInfoEvent.ListenInfoNetwork(brokCon["key"].(string))
+							postOwnInfoEvent.ListenInfoUsage(brokCon["key"].(string))
+						}
 					case "rabbitmq":
 						// Init rabbitmq broker.
 						jobManagerEvent.ListenEvent(brokCon["key"].(string))
-						postOwnInfoEvent.ListenInfoHardware(brokCon["key"].(string))
-						postOwnInfoEvent.ListenInfoNetwork(brokCon["key"].(string))
-						postOwnInfoEvent.ListenInfoUsage(brokCon["key"].(string))
+						if support.Helper.ConfigYaml.ConfigData.End_point != "" {
+							postOwnInfoEvent.ListenInfoHardware(brokCon["key"].(string))
+							postOwnInfoEvent.ListenInfoNetwork(brokCon["key"].(string))
+							postOwnInfoEvent.ListenInfoUsage(brokCon["key"].(string))
+						}
 					case "redis":
 						// Init redis broker.
 						jobManagerEvent.ListenEvent(brokCon["key"].(string))
-						postOwnInfoEvent.ListenInfoHardware(brokCon["key"].(string))
-						postOwnInfoEvent.ListenInfoNetwork(brokCon["key"].(string))
-						postOwnInfoEvent.ListenInfoUsage(brokCon["key"].(string))
+						if support.Helper.ConfigYaml.ConfigData.End_point != "" {
+							postOwnInfoEvent.ListenInfoHardware(brokCon["key"].(string))
+							postOwnInfoEvent.ListenInfoNetwork(brokCon["key"].(string))
+							postOwnInfoEvent.ListenInfoUsage(brokCon["key"].(string))
+						}
 					}
 
 					supportSupport.PrintGroupName("Job Item is running :)")

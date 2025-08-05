@@ -2,9 +2,12 @@ package support
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"strconv"
 	"time"
 
@@ -44,15 +47,43 @@ func (c *AMQPSupport) ConnectPubSub() (*amqp.Connection, error) {
 	amqpUser := c.amqpConfInfo.User
 	amqpPassword := c.amqpConfInfo.Password
 
+	var tlsConfig *tls.Config
+	if c.amqpConfInfo.Secure {
+		if c.amqpConfInfo.CAFile != "" {
+			caCert, err := os.ReadFile(c.amqpConfInfo.CAFile)
+			if err != nil {
+				return nil, err
+			}
+			caCertPool := x509.NewCertPool()
+			caCertPool.AppendCertsFromPEM(caCert)
+			tlsConfig = &tls.Config{RootCAs: caCertPool}
+			if c.amqpConfInfo.CertFile != "" && c.amqpConfInfo.KeyFile != "" {
+				cert, err := tls.LoadX509KeyPair(c.amqpConfInfo.CertFile, c.amqpConfInfo.KeyFile)
+				if err != nil {
+					return nil, err
+				}
+				tlsConfig.Certificates = []tls.Certificate{cert}
+			}
+		}
+	}
+
 	// Create AMQP URI
 	url := "amqp://" + amqpUser + ":" + amqpPassword + "@" + amqpHost + ":" + strconv.Itoa(amqpPort) + "/"
+	if c.amqpConfInfo.Secure {
+		url = "amqps://" + amqpUser + ":" + amqpPassword + "@" + amqpHost + ":" + strconv.Itoa(amqpPort) + "/"
+	}
 	fmt.Println("AMQP Connection inf :: ", url)
 
 	// Retry mechanism
 	var err error
 	for {
-		nc, connErr := amqp.Dial(url)
-		if connErr == nil {
+		var nc *amqp.Connection
+		if c.amqpConfInfo.Secure {
+			nc, err = amqp.DialTLS(url, tlsConfig)
+		} else {
+			nc, err = amqp.Dial(url)
+		}
+		if err == nil {
 			c.nc = nc
 
 			// Set up connection monitoring
@@ -75,18 +106,37 @@ func (c *AMQPSupport) ConnectPubSub() (*amqp.Connection, error) {
 			c.ch = ch
 			break
 		}
-		fmt.Println("AMQP connection failed, retrying in 5-10 seconds:", connErr.Error())
+		fmt.Println("AMQP connection failed, retrying in 5-10 seconds:", err.Error())
 		time.Sleep(5 * time.Second) // Delay before retrying
-		err = connErr
 	}
 
 	return c.nc, err
 }
 
+func (c *AMQPSupport) dialAMQP(url string) (*amqp.Connection, error) {
+	if c.amqpConfInfo.Secure {
+		caCert, err := os.ReadFile(c.amqpConfInfo.CAFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read CA file: %w", err)
+		}
+		caCertPool := x509.NewCertPool()
+		caCertPool.AppendCertsFromPEM(caCert)
+		tlsConfig := &tls.Config{RootCAs: caCertPool}
+		if c.amqpConfInfo.CertFile != "" && c.amqpConfInfo.KeyFile != "" {
+			cert, err := tls.LoadX509KeyPair(c.amqpConfInfo.CertFile, c.amqpConfInfo.KeyFile)
+			if err != nil {
+				return nil, fmt.Errorf("failed to load client cert/key: %w", err)
+			}
+			tlsConfig.Certificates = []tls.Certificate{cert}
+		}
+		return amqp.DialTLS(url, tlsConfig)
+	}
+	return amqp.Dial(url)
+}
+
 func (c *AMQPSupport) retryConnection(url string) {
 	for {
-		// Attempt to reconnect
-		nc, connErr := amqp.Dial(url)
+		nc, connErr := c.dialAMQP(url)
 		if connErr == nil {
 			c.nc = nc
 			fmt.Println("Successfully reconnected to AMQP server:", url)

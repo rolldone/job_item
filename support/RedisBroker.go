@@ -1,17 +1,11 @@
 package support
 
 import (
-	"archive/zip"
-	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -25,19 +19,7 @@ type RedisSupport struct {
 func NewRedisSupportConstruct(config RedisBrokerConnection) (*RedisSupport, error) {
 	var tlsConfig *tls.Config
 	if config.Secure {
-		// Get endpoint, app_id, app_secret from global config
-		caDownloadEndpoint := fmt.Sprintf("%s/api/worker/config/tls/download", Helper.ConfigYaml.ConfigData.End_point)
-		appID := Helper.ConfigYaml.ConfigData.Credential.Project_id
-		appSecret := Helper.ConfigYaml.ConfigData.Credential.Secret_key
 		if config.CAFile != "" {
-			certDir := filepath.Dir(config.CAFile)
-			// Download and extract zip if CA file does not exist
-			if _, err := os.Stat(config.CAFile); os.IsNotExist(err) {
-				err := DownloadAndExtractRedisCerts(caDownloadEndpoint, certDir, appID, appSecret)
-				if err != nil {
-					return nil, err
-				}
-			}
 			// Load CA cert
 			caCert, err := os.ReadFile(config.CAFile)
 			if err != nil {
@@ -168,65 +150,6 @@ func (r *RedisSupport) BasicSubSync(topic string, callback func(message string, 
 		callback("", fmt.Errorf("timeout"))
 		return nil
 	}
-}
-
-// DownloadAndExtractRedisCerts downloads a zip file from the backend and extracts it to the given directory.
-func DownloadAndExtractRedisCerts(endpoint, destDir, appID, appSecret string) error {
-	if err := os.MkdirAll(destDir, 0755); err != nil {
-		return err
-	}
-	// Prepare JSON body
-	body := map[string]string{
-		"app_id":     appID,
-		"app_secret": appSecret,
-	}
-	jsonBody, err := json.Marshal(body)
-	if err != nil {
-		return err
-	}
-	resp, err := http.Post(endpoint, "application/json", bytes.NewBuffer(jsonBody))
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("failed to download Redis certs zip: status %d", resp.StatusCode)
-	}
-	// Read zip into memory
-	zipBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-	zipReader, err := zip.NewReader(bytes.NewReader(zipBytes), int64(len(zipBytes)))
-	if err != nil {
-		return err
-	}
-	for _, f := range zipReader.File {
-		outPath := filepath.Join(destDir, f.Name)
-		if f.FileInfo().IsDir() {
-			os.MkdirAll(outPath, 0755)
-			continue
-		}
-		if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
-			return err
-		}
-		outFile, err := os.Create(outPath)
-		if err != nil {
-			return err
-		}
-		inFile, err := f.Open()
-		if err != nil {
-			outFile.Close()
-			return err
-		}
-		_, err = io.Copy(outFile, inFile)
-		inFile.Close()
-		outFile.Close()
-		if err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // Interface from SupportInterface
