@@ -55,6 +55,24 @@ const server = createServer(async (req, res) => {
 server.listen(port, () => {
     console.log(`Server is running on port ${port}`);
     writePidToFile(); // Write the current PID to pid.txt
+    // Set up graceful shutdown
+    const shutdown = () => {
+        console.log('Shutting down server...');
+        server.close(() => {
+            console.log('Server closed');
+            if (existsSync('pid.txt')) {
+                unlinkSync('pid.txt');
+            }
+            // process.exit(1);
+        });
+        
+        // Force exit after timeout
+        setTimeout(() => {
+            console.log('Force exit after timeout');
+            process.exit(0);
+        }, 10000); // 10 seconds
+    };
+    shutdown()
 });
 
 server.on('error', (err) => {
