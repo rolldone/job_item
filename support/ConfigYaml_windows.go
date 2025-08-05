@@ -97,7 +97,7 @@ func (c *ConfigYamlSupport) CloseAllGroupProcesses(cmds []*exec.Cmd) {
 		// Use taskkill on Windows to kill parent and all children
 		taskkill := exec.Command("taskkill", "/PID", strconv.Itoa(pid), "/T", "/F")
 		if err := taskkill.Run(); err != nil {
-			Helper.PrintErrName("Error killing process tree (taskkill): " + err.Error())
+			Helper.PrintErrName("Error killing process tree (taskkill): "+err.Error(), "ERR-20230903101")
 		}
 	}
 }

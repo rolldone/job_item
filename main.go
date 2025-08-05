@@ -46,7 +46,7 @@ func main() {
 		support.Helper.PrintGroupName("Download New Version :: " + configYamlSupport.ConfigData.Job_item_link)
 		err := configYamlSupport.DownloadNewApp(configYamlSupport.ConfigData.Job_item_version_number)
 		if err != nil {
-			support.Helper.PrintErrName(err.Error())
+			support.Helper.PrintErrName(err.Error(), "ERR-25230903100")
 			panic(1)
 		}
 	} else {
@@ -62,12 +62,12 @@ func main() {
 	run_child <- "start"
 	cmdExec, err := configYamlSupport.RunChildExecsProcess()
 	if err != nil {
-		support.Helper.PrintErrName("Error starting exec process: " + err.Error())
+		support.Helper.PrintErrName("Error starting exec process: "+err.Error(), "ERR-30350903200")
 		panic(1)
 	}
 	cmd, err := configYamlSupport.RunChildProcess()
 	if err != nil {
-		support.Helper.PrintErrName("Error starting child process: " + err.Error())
+		support.Helper.PrintErrName("Error starting child process: "+err.Error(), "ERR-60350903200")
 		panic(1)
 	}
 
@@ -75,7 +75,7 @@ func main() {
 	restartProcess := func() {
 		watcher, err := fsnotify.NewWatcher()
 		if err != nil {
-			support.Helper.PrintErrName("Error creating file watcher: " + err.Error())
+			support.Helper.PrintErrName("Error creating file watcher: "+err.Error(), "ERR-10351903200")
 		}
 		defer watcher.Close()
 
@@ -99,7 +99,7 @@ func main() {
 				// For cmd is not have child process, so we only wait cmdExec for it
 				err = cmdExec.Wait()
 				if err != nil {
-					support.Helper.PrintErrName("Waiting for exec command : " + err.Error())
+					support.Helper.PrintErrName("Waiting for exec command : "+err.Error(), "ERR-20350903210")
 				}
 				time.Sleep(3 * time.Second) // Wait for 3 seconds before restarting
 				cmd = nil
@@ -121,7 +121,7 @@ func main() {
 
 	hostInfo, err := support.Helper.HardwareInfo.GetInfoHardware()
 	if err != nil {
-		support.Helper.PrintErrName("Error getting hardware info: " + err.Error())
+		support.Helper.PrintErrName("Error getting hardware info: "+err.Error(), "ERR-30350903208")
 		panic(1)
 	}
 	support.Helper.PrintGroupName("----------------------------------------------------")
@@ -145,7 +145,7 @@ func main() {
 			// For cmd is not have child process, so we only wait cmdExec for it
 			err = cmdExec.Wait()
 			if err != nil {
-				support.Helper.PrintErrName("Waiting for exec command : " + err.Error())
+				support.Helper.PrintErrName("Waiting for exec command : "+err.Error(), "ERR-20350903511")
 			}
 			os.Exit(0)
 		}
@@ -159,7 +159,7 @@ func main() {
 		case "restart":
 			cmd, err = configYamlSupport.RunChildProcess()
 			if err != nil {
-				support.Helper.PrintErrName("Error starting child process: " + err.Error())
+				support.Helper.PrintErrName("Error starting child process: "+err.Error(), "ERR-20350903201")
 				panic(1)
 			}
 			cmdExec, err = configYamlSupport.RunChildExecsProcess()
@@ -368,12 +368,12 @@ func initCli() bool {
 							support.Helper.PrintGroupName("Restart child process from event bus")
 							err := saveWithoutChange(support.Helper.ConfigYaml.Config_path)
 							if err != nil {
-								support.Helper.PrintErrName("ERROR: " + err.Error())
+								support.Helper.PrintErrName("ERROR: "+err.Error(), "ERR-80350903201")
 								// Handle the error appropriately
 							}
 						})
 						if err != nil {
-							support.Helper.PrintErrName("Error subscribing to job_item_restart event: " + err.Error())
+							support.Helper.PrintErrName("Error subscribing to job_item_restart event: "+err.Error(), "ERR-40350903201")
 							return
 						}
 					}
@@ -406,7 +406,7 @@ func initCli() bool {
 						Config_path:     ctx.String("config"),
 					})
 					if err != nil {
-						support.Helper.PrintErrName("Error initializing config yaml support: " + err.Error())
+						support.Helper.PrintErrName("Error initializing config yaml support: "+err.Error(), "ERR-30350903702")
 						return err
 					}
 

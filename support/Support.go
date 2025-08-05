@@ -30,11 +30,11 @@ type SupportService struct {
 }
 
 func (c *SupportService) PrintGroupName(printText string) {
-	fmt.Println(c.Segment_app, " >> ", printText)
+	fmt.Println(c.Segment_app, ">>", printText)
 }
 
-func (c *SupportService) PrintErrName(printText string) {
-	fmt.Println(c.Segment_app, " - ERR >> ", printText)
+func (c *SupportService) PrintErrName(printText string, uniqueString string) {
+	fmt.Println(c.Segment_app, "- ["+uniqueString+"] >>", printText)
 }
 
 func (c *SupportService) Register(tt SupportInterface) {

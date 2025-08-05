@@ -91,7 +91,7 @@ func (c *ConfigYamlSupport) RunChildProcess() (*exec.Cmd, error) {
 	// Wait for the command to finish with a timeout
 	err = waitWithTimeout(cmd, 2*time.Second)
 	if err != nil {
-		Helper.PrintErrName(fmt.Sprintf("Error waiting for command: %v\n", err))
+		Helper.PrintErrName(fmt.Sprintf("Error waiting for command: %v\n", err), "ERR-20230903202")
 		return nil, err
 	}
 
@@ -108,7 +108,7 @@ func (c *ConfigYamlSupport) CloseAllGroupProcesses(cmds []*exec.Cmd) {
 		}
 		err := syscall.Kill(-cmdItem.Process.Pid, syscall.SIGTERM)
 		if err != nil {
-			Helper.PrintErrName("Error killing process: syscall.Kill() " + " - " + cmdItem.String() + " : " + err.Error())
+			Helper.PrintErrName("Error killing process: syscall.Kill() "+" - "+cmdItem.String()+" : "+err.Error(), "ERR-20230903201")
 		}
 	}
 }

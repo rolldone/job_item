@@ -26,6 +26,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -391,7 +392,7 @@ func printOutput(reader io.Reader) {
 func printOutputWithIdentity(reader io.Reader, identity string) {
 	scanner := bufio.NewScanner(reader)
 	for scanner.Scan() {
-		fmt.Printf("[%s] %s\n", identity, strings.TrimSpace(scanner.Text()))
+		Helper.PrintGroupName(fmt.Sprintf("[%s] >> %s", identity, strings.TrimSpace(scanner.Text())))
 	}
 }
 
@@ -666,59 +667,94 @@ func (c *ConfigYamlSupport) RunExecsProcess() []*exec.Cmd {
 
 		for attempt := 1; attempt <= retryCount; attempt++ {
 
+			restartAttempts := 100 // Number of restart attempts
+
 			// Create the command
-			cmd = append(cmd, createIndependentCommand(execConfig, workingDir))
+			cmdItem := NewMonitoredCmd(createIndependentCommand(execConfig, workingDir))
+			cmd = append(cmd, cmdItem.Cmd)
 
-			cmdItem := cmd[len(cmd)-1]
-
-			// Capture stdout and stderr
-			stdout, err := cmdItem.StdoutPipe()
+			// Use the helper function to set up pipes
+			stdout, stderr, err := setupCommandPipes(cmdItem.Cmd, execConfig.Name)
 			if err != nil {
-				Helper.PrintErrName(fmt.Sprintf("Error creating stdout pipe for %s: %v\n", execConfig.Name, err))
-				cmd = cmd[:len(cmd)-1] // Remove the last command if there's an error
-				continue
-			}
-			stderr, err := cmdItem.StderrPipe()
-			if err != nil {
-				Helper.PrintErrName(fmt.Sprintf("Error creating stderr pipe for %s: %v\n", execConfig.Name, err))
 				cmd = cmd[:len(cmd)-1] // Remove the last command if there's an error
 				continue
 			}
 
-			err = cmdItem.Start()
-			if err != nil {
-				Helper.PrintErrName(fmt.Sprintf("Error starting command for %s (Attempt %d/%d): %v\n", execConfig.Name, attempt, retryCount, err))
-				cmd = cmd[:len(cmd)-1] // Remove the last command if there's an error
-				if attempt == retryCount {
-					Helper.PrintErrName(fmt.Sprintf("Failed to execute command for %s after %d attempts\n", execConfig.Name, retryCount))
-				}
-				if attempt < retryCount {
-					Helper.PrintGroupName(fmt.Sprintf("Retrying command for %s after %v...\n", execConfig.Name, retryDelay))
-					time.Sleep(retryDelay) // Add delay before retrying
-				}
-				continue
-			}
-
-			// Wait for the command to finish with a timeout
-			err = waitWithTimeout(cmdItem, 2*time.Second)
-			if err != nil {
-				Helper.PrintErrName(fmt.Sprintf("Error waiting for command for %s (Attempt %d/%d): %v\n", execConfig.Name, attempt, retryCount, err))
-				if attempt == retryCount {
-					Helper.PrintErrName(fmt.Sprintf("Failed to execute command for %s after %d attempts\n", execConfig.Name, retryCount))
-				}
-				if attempt < retryCount {
-					Helper.PrintGroupName(fmt.Sprintf("Retrying command for %s after %v...\n", execConfig.Name, retryDelay))
-					time.Sleep(retryDelay) // Add delay before retrying
-				}
-				continue
-			}
-
+			// Capture and log stdout and stderr
 			go printOutputWithIdentity(stdout, execConfig.Name)
 			go printOutputWithIdentity(stderr, execConfig.Name)
+
+			// Start the command
+			err = cmdItem.Cmd.Start()
+			if err != nil {
+				Helper.PrintErrName(fmt.Sprintf("Error starting command for %s (Attempt %d/%d): %v\n", execConfig.Name, attempt, retryCount, err), "ERR-CMD-START")
+				cmd = cmd[:len(cmd)-1] // Remove the last command if there's an error
+				if attempt == retryCount {
+					Helper.PrintErrName(fmt.Sprintf("Failed to execute command for %s after %d attempts\n", execConfig.Name, retryCount), "ERR-CMD-FAIL")
+				}
+				if attempt < retryCount {
+					Helper.PrintGroupName(fmt.Sprintf("Retrying command for %s after %v...\n", execConfig.Name, retryDelay))
+					time.Sleep(retryDelay) // Add delay before retrying
+				}
+				continue
+			}
+
+			// Log the running process
+			Helper.PrintGroupName(fmt.Sprintf("Command '%s' is running with PID: %d\n", execConfig.Name, cmdItem.Cmd.Process.Pid))
+
+			// Wait for the command and handle restarts
+			go func(cmdItem *MonitoredCmd, execName string) {
+				for restartAttempt := 0; restartAttempt < restartAttempts; restartAttempt++ {
+					err := cmdItem.Wait()
+					if err != nil {
+						for in, c := range cmd {
+							if c.Process.Pid == cmdItem.Cmd.Process.Pid {
+								cmd = cmd[:in] // Remove the last command if there's an error
+								break
+							}
+						}
+						Helper.PrintErrName(fmt.Sprintf("Command '%s' finished with error: %v. Restarting... (Attempt %d/%d)\n", execName, err, restartAttempt+1, restartAttempts), "ERR-234233432")
+
+						time.Sleep(3 * time.Second) // Wait before restarting
+
+						cmdItem = NewMonitoredCmd(createIndependentCommand(execConfig, workingDir))
+
+						stdout, stderr, err := setupCommandPipes(cmdItem.Cmd, execConfig.Name)
+						if err != nil {
+							cmd = cmd[:len(cmd)-1] // Remove the last command if there's an error
+							continue
+						}
+
+						// Capture and log stdout and stderr
+						go printOutputWithIdentity(stdout, execConfig.Name)
+						go printOutputWithIdentity(stderr, execConfig.Name)
+
+						cmdItem.Cmd.Start()
+						cmd = append(cmd, cmdItem.Cmd)
+					} else {
+						Helper.PrintGroupName(fmt.Sprintf("Command '%s' finished successfully.\n", execName))
+						break
+					}
+				}
+			}(cmdItem, execConfig.Name)
+
 			break // Exit retry loop on success
 		}
 	}
 	return cmd
+}
+
+// monitorCommand listens for when an *exec.Cmd exits, either successfully or with an error.
+// It logs the event for each command.
+func monitorCommand(cmd *exec.Cmd, name string) {
+	go func() {
+		err := cmd.Wait()
+		if err != nil {
+			fmt.Printf("9999999999999999Command '%s' exited with error: %v\n", name, err)
+		} else {
+			fmt.Printf("8888888888888888Command '%s' exited successfully.\n", name)
+		}
+	}()
 }
 
 // waitWithTimeout waits for the command to finish with a timeout.
@@ -736,4 +772,45 @@ func waitWithTimeout(cmd *exec.Cmd, timeout time.Duration) error {
 		// Timeout occurred, but do not kill the process
 		return nil // Return nil to indicate no error
 	}
+}
+
+type MonitoredCmd struct {
+	Cmd        *exec.Cmd
+	waitCalled bool
+	mutex      sync.Mutex
+}
+
+func (mc *MonitoredCmd) Wait() error {
+	mc.mutex.Lock()
+	defer mc.mutex.Unlock()
+
+	if mc.waitCalled {
+		return fmt.Errorf("Wait was already called on this command")
+	}
+
+	mc.waitCalled = true
+	return mc.Cmd.Wait()
+}
+
+func NewMonitoredCmd(cmd *exec.Cmd) *MonitoredCmd {
+	return &MonitoredCmd{
+		Cmd: cmd,
+	}
+}
+
+// setupCommandPipes sets up stdout and stderr pipes for the given command and returns them.
+func setupCommandPipes(cmd *exec.Cmd, identity string) (io.ReadCloser, io.ReadCloser, error) {
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		Helper.PrintErrName(fmt.Sprintf("Error creating stdout pipe for %s: %v\n", identity, err), "ERR-STDOUT-PIPE")
+		return nil, nil, err
+	}
+
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		Helper.PrintErrName(fmt.Sprintf("Error creating stderr pipe for %s: %v\n", identity, err), "ERR-STDERR-PIPE")
+		return nil, nil, err
+	}
+
+	return stdout, stderr, nil
 }
