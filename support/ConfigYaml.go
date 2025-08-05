@@ -648,6 +648,79 @@ func (c ConfigYamlSupport) GetRedisBrokerCon(gg BrokerConInterface) RedisBrokerC
 	return kk
 }
 
+// RunExecsProcess runs all exec commands defined in the configuration.
+// It captures their output, retries on failure, and handles timeouts.
+func (c *ConfigYamlSupport) RunExecsProcess() []*exec.Cmd {
+	var cmd []*exec.Cmd
+	retryCount := 5               // Number of retry attempts
+	retryDelay := 2 * time.Second // Delay between retries
+
+	for _, execConfig := range c.ConfigData.Execs {
+		Helper.PrintGroupName(fmt.Sprintf("Running exec: %s, Key: %s, Cmd: %s\n", execConfig.Name, execConfig.Key, execConfig.Cmd))
+
+		// Resolve working directory
+		workingDir := execConfig.Working_dir
+		if !filepath.IsAbs(workingDir) {
+			workingDir = filepath.Join(filepath.Dir(c.Config_path), workingDir)
+		}
+
+		for attempt := 1; attempt <= retryCount; attempt++ {
+
+			// Create the command
+			cmd = append(cmd, createIndependentCommand(execConfig, workingDir))
+
+			cmdItem := cmd[len(cmd)-1]
+
+			// Capture stdout and stderr
+			stdout, err := cmdItem.StdoutPipe()
+			if err != nil {
+				Helper.PrintErrName(fmt.Sprintf("Error creating stdout pipe for %s: %v\n", execConfig.Name, err))
+				cmd = cmd[:len(cmd)-1] // Remove the last command if there's an error
+				continue
+			}
+			stderr, err := cmdItem.StderrPipe()
+			if err != nil {
+				Helper.PrintErrName(fmt.Sprintf("Error creating stderr pipe for %s: %v\n", execConfig.Name, err))
+				cmd = cmd[:len(cmd)-1] // Remove the last command if there's an error
+				continue
+			}
+
+			err = cmdItem.Start()
+			if err != nil {
+				Helper.PrintErrName(fmt.Sprintf("Error starting command for %s (Attempt %d/%d): %v\n", execConfig.Name, attempt, retryCount, err))
+				cmd = cmd[:len(cmd)-1] // Remove the last command if there's an error
+				if attempt == retryCount {
+					Helper.PrintErrName(fmt.Sprintf("Failed to execute command for %s after %d attempts\n", execConfig.Name, retryCount))
+				}
+				if attempt < retryCount {
+					Helper.PrintGroupName(fmt.Sprintf("Retrying command for %s after %v...\n", execConfig.Name, retryDelay))
+					time.Sleep(retryDelay) // Add delay before retrying
+				}
+				continue
+			}
+
+			// Wait for the command to finish with a timeout
+			err = waitWithTimeout(cmdItem, 2*time.Second)
+			if err != nil {
+				Helper.PrintErrName(fmt.Sprintf("Error waiting for command for %s (Attempt %d/%d): %v\n", execConfig.Name, attempt, retryCount, err))
+				if attempt == retryCount {
+					Helper.PrintErrName(fmt.Sprintf("Failed to execute command for %s after %d attempts\n", execConfig.Name, retryCount))
+				}
+				if attempt < retryCount {
+					Helper.PrintGroupName(fmt.Sprintf("Retrying command for %s after %v...\n", execConfig.Name, retryDelay))
+					time.Sleep(retryDelay) // Add delay before retrying
+				}
+				continue
+			}
+
+			go printOutputWithIdentity(stdout, execConfig.Name)
+			go printOutputWithIdentity(stderr, execConfig.Name)
+			break // Exit retry loop on success
+		}
+	}
+	return cmd
+}
+
 // waitWithTimeout waits for the command to finish with a timeout.
 // If the timeout is reached, it returns nil without killing the process.
 func waitWithTimeout(cmd *exec.Cmd, timeout time.Duration) error {
