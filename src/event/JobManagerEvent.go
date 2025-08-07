@@ -290,7 +290,9 @@ func (c *JobManagerEventItem) WatchProcessCMD(cmd *exec.Cmd, task_id string) {
 				break
 			}
 			fmt.Println("stderr :: ", string(out[:n2]))
-			conn.Pub(task_id+"_failed", string(out[:n2]))
+			if support.Helper.ConfigYaml.ConfigData.End_point != "" {
+				conn.Pub(task_id+"_failed", string(out[:n2]))
+			}
 			c.Last_status = GetStatus().STATUS_ERROR
 		}
 	}(c.conn)
@@ -305,7 +307,9 @@ func (c *JobManagerEventItem) WatchProcessCMD(cmd *exec.Cmd, task_id string) {
 			}
 			fmt.Println("stdout :: ", string(out[:n]))
 			// conn.Pub(task_id+"_process", fmt.Sprint("stdout :: ", string(out[:n])))
-			conn.Pub(task_id+"_process", string(out[:n]))
+			if support.Helper.ConfigYaml.ConfigData.End_point != "" {
+				conn.Pub(task_id+"_process", string(out[:n]))
+			}
 		}
 	}(c.conn)
 
