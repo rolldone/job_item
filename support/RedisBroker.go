@@ -84,28 +84,28 @@ func (r *RedisSupport) Sub(uuidItem string, group string, callback func(message 
 	return func() { pubsub.Close() }, nil
 }
 
-func (r *RedisSupport) SubSync(uuidItem string, group string, callback func(message string, err error), opts SubSyncOpts) error {
+func (r *RedisSupport) SubSync(uuidItem string, group string, callback func(message string, err error), opts SubSyncOpts) (bool, error) {
 	pubsub := r.client.Subscribe(context.Background(), uuidItem)
 	defer pubsub.Close()
 	select {
 	case msg := <-pubsub.Channel():
 		lockKey := fmt.Sprintf("lock:%s:%s:%x", uuidItem, group, msg.Payload)
-		ok, err := r.client.SetNX(context.Background(), lockKey, "1", 5*time.Second).Result()
+		ok, err := r.client.SetNX(context.Background(), lockKey, "1", 10*time.Second).Result()
 		if err != nil {
 			callback("", fmt.Errorf("Redis lock error: %v", err))
-			return err
+			return true, err
 		}
 		if ok {
 			callback(msg.Payload, nil)
-			return nil
+			return false, nil
 		} else {
 			// Did not get lock, skip
 			callback("", fmt.Errorf("lock not acquired"))
-			return nil
+			return true, nil
 		}
 	case <-time.After(time.Duration(opts.Timeout_second) * time.Second):
 		callback("", fmt.Errorf("timeout"))
-		return nil
+		return true, nil
 	}
 }
 
@@ -139,17 +139,9 @@ func (r *RedisSupport) BasicSub(topic string, callback func(message string)) (fu
 	return func() { pubsub.Close() }, nil
 }
 
-func (r *RedisSupport) BasicSubSync(topic string, callback func(message string, err error), opts SubSyncOpts) error {
-	pubsub := r.client.Subscribe(context.Background(), topic)
-	defer pubsub.Close()
-	select {
-	case msg := <-pubsub.Channel():
-		callback(msg.Payload, nil)
-		return nil
-	case <-time.After(time.Duration(opts.Timeout_second) * time.Second):
-		callback("", fmt.Errorf("timeout"))
-		return nil
-	}
+func (r *RedisSupport) BasicSubSync(topic string, callback func(message string, err error), opts SubSyncOpts) (bool, error) {
+	gg, err := r.SubSync(topic, "", callback, opts)
+	return gg, err
 }
 
 // Interface from SupportInterface

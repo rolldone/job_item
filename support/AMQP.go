@@ -255,79 +255,41 @@ func (c *AMQPSupport) Sub(topic string, group_id string, callback func(message s
 }
 
 // Interface from BrokerConnectionInterface
-func (c *AMQPSupport) SubSync(uuidItem string, group_id string, callback func(message string, err error), opts SubSyncOpts) error {
+// For this message queue case we ignore group_id
+func (c *AMQPSupport) SubSync(uuidItem string, group_id string, callback func(message string, err error), opts SubSyncOpts) (bool, error) {
+	key_topic := uuidItem
 
-	key_topic := group_id + "." + uuidItem
-	if group_id == "" {
-		key_topic = uuidItem
-	}
 	_, err := c.ch.QueueDeclare(key_topic, false, true, false, false, nil)
 	if err != nil {
-		return fmt.Errorf("failed to declare queue: %w", err)
+		return true, fmt.Errorf("failed to declare queue: %w", err)
 	}
 	msgs, err := c.ch.Consume(key_topic, "", true, false, false, false, nil)
 	if err != nil {
-		return fmt.Errorf("failed to register consumer: %w", err)
+		return true, fmt.Errorf("failed to register consumer: %w", err)
 	}
 
-	// messageCount := 0
-	maxMessages := opts.Timeout_second // Maximum number of timeout process
-	// Use a timeout duration of 10 seconds
-	timeout := time.After(time.Duration(maxMessages) * time.Second) // Adjust timeout duration as needed
-	var finish bool
+	timeout := time.After(time.Duration(opts.Timeout_second) * time.Second)
 	var errr error
-	for !finish {
-		select {
-		case msg, ok := <-msgs:
-			// Process the message here
-			if !ok {
-				errr = errors.New("channel closed")
-				callback("", errr)
-				finish = true
-				break
-			}
-			// Process the received message
-			log.Printf("unSubscribeFinish: %s\n", msg.Body)
-			if _, errr = c.ch.QueueDelete(group_id+"."+uuidItem, false, false, false); errr != nil {
-				log.Printf("Failed to cancel consumer: %v", errr)
-			}
-			callback(string(msg.Body), nil)
-			finish = true
-		case <-timeout:
-			log.Println("Timeout reached. Stopping message consumption.")
-			if _, errr = c.ch.QueueDelete(group_id+"."+uuidItem, false, false, false); errr != nil {
-				log.Printf("Failed to cancel consumer: %v", errr)
-			} else {
-				callback("", fmt.Errorf("timeout"))
-			}
-			finish = true
-		}
-	}
-	return errr
-	// for messageCount < maxMessages {
-	// 	// Wait for a message
-	// 	for
-	// 	msg, err := unsubribce.NextMsg(1 * time.Second) // Timeout after 5 seconds if no message
-	// 	if err != nil {
-	// 		if err == amqp.ErrTimeout {
-	// 			fmt.Println("Timed out waiting for a message.", (messageCount + 1))
-	// 			messageCount++
-	// 			continue
-	// 		}
-	// 		log.Fatal(err)
-	// 	}
 
-	// 	// Process the received message
-	// 	fmt.Printf("\n unSubscribeFinish: %s\n", msg.Data)
-	// 	callback(string(msg.Data), nil)
-	// 	unsubribce.Unsubscribe()
-	// 	break
-	// }
-	// if messageCount >= maxMessages {
-	// 	unsubribce.Unsubscribe()
-	// 	callback(GetStatus().STATUS_TIMEOUT, nil)
-	// }
-	// return nil
+	select {
+	case msg, ok := <-msgs:
+		if !ok {
+			errr = errors.New("channel closed")
+			callback(GetStatus().STATUS_ERROR, errr)
+			return true, errr
+		}
+		log.Printf("unSubscribeFinish: %s\n", msg.Body)
+		if _, errr = c.ch.QueueDelete(key_topic, false, false, false); errr != nil {
+			log.Printf("Failed to cancel consumer: %v", errr)
+		}
+		callback(string(msg.Body), nil)
+		return false, nil // Not timeout
+	case <-timeout:
+		if _, errr = c.ch.QueueDelete(key_topic, false, false, false); errr != nil {
+			log.Printf("Failed to cancel consumer: %v", errr)
+		}
+		return true, nil // Timeout
+	}
 }
 
 // Interface from BrokerConnectionInterface
@@ -363,34 +325,39 @@ func (c *AMQPSupport) BasicSub(topic string, callback func(message string)) (fun
 }
 
 // Interface from BrokerConnectionInterface
-func (c *AMQPSupport) BasicSubSync(uuidItem string, callback func(message string, err error), opts SubSyncOpts) error {
+func (c *AMQPSupport) BasicSubSync(uuidItem string, callback func(message string, err error), opts SubSyncOpts) (bool, error) {
 	key_topic := uuidItem
 
 	_, err := c.ch.QueueDeclare(key_topic, false, true, false, false, nil)
 	if err != nil {
-		return fmt.Errorf("failed to declare queue: %w", err)
+		return true, fmt.Errorf("failed to declare queue: %w", err)
 	}
 	msgs, err := c.ch.Consume(key_topic, "", true, false, false, false, nil)
 	if err != nil {
-		return fmt.Errorf("failed to register consumer: %w", err)
+		return true, fmt.Errorf("failed to register consumer: %w", err)
 	}
-
+	timeout := time.After(time.Duration(opts.Timeout_second) * time.Second)
 	var errr error
 
-	msg, ok := <-msgs
-	if !ok {
-		errr = errors.New("channel closed")
-		callback(GetStatus().STATUS_ERROR, errr)
+	select {
+	case msg, ok := <-msgs:
+		if !ok {
+			errr = errors.New("channel closed")
+			callback(GetStatus().STATUS_ERROR, errr)
+			return true, errr
+		}
+		log.Printf("unSubscribeFinish: %s\n", msg.Body)
+		if _, errr = c.ch.QueueDelete(key_topic, false, false, false); errr != nil {
+			log.Printf("Failed to cancel consumer: %v", errr)
+		}
+		callback(string(msg.Body), nil)
+		return false, nil // Not timeout
+	case <-timeout:
+		if _, errr = c.ch.QueueDelete(key_topic, false, false, false); errr != nil {
+			log.Printf("Failed to cancel consumer: %v", errr)
+		}
+		return true, nil // Timeout
 	}
-	// Process the message here
-	// Process the received message
-	log.Printf("unSubscribeFinish: %s\n", msg.Body)
-	if _, errr = c.ch.QueueDelete(key_topic, false, false, false); errr != nil {
-		log.Printf("Failed to cancel consumer: %v", errr)
-	}
-	callback(string(msg.Body), nil)
-
-	return errr
 }
 
 // Interface from BrokerConnectionInterface

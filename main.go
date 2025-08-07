@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	jobitem "job_item/src/controller/JobItem"
+	jobmanager "job_item/src/controller/JobManager"
 	"job_item/src/event"
 	"job_item/src/helper"
 	"job_item/support"
@@ -14,6 +16,7 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/gin-gonic/gin"
 	"github.com/urfave/cli/v2"
 )
 
@@ -125,6 +128,8 @@ func main() {
 		panic(1)
 	}
 	support.Helper.PrintGroupName("----------------------------------------------------")
+	support.Helper.PrintGroupName("Job Item Identity ID :: " + configYamlSupport.ConfigData.Identity_id)
+	support.Helper.PrintGroupName("----------------------------------------------------")
 	support.Helper.PrintGroupName("Hardware Identification")
 	support.Helper.PrintGroupName("hostID :: " + hostInfo.HostID)
 	support.Helper.PrintGroupName("hostname :: " + hostInfo.Hostname)
@@ -232,6 +237,22 @@ func initCli() bool {
 				retryRequest = false
 				supportSupport.Register(configYamlSupport)
 			}
+
+			// Initialize broker connection support
+			// This will init the broker connection support
+			// and register the connection to the broker connection support
+			brokerConnectionSupport := initBrokerConnections(configYamlSupport)
+			supportSupport.Register(brokerConnectionSupport)
+
+			// Listen signal shutdown from child and child exec process
+			conn := brokerConnectionSupport.GetConnection(configYamlSupport.ConfigData.Broker_connection["key"].(string))
+			configYamlSupport.ListenForShutdownFromConn(conn)
+
+			// Register gin support
+			ginSupport := support.GinConstruct()
+			supportSupport.Register(ginSupport)
+			ginInitialize(ginSupport.Router)
+
 			return nil
 		},
 
@@ -247,8 +268,6 @@ func initCli() bool {
 					flag = "child_process"
 
 					supportSupport := support.SupportConstruct("Child")
-
-					brokerConnectionSupport := support.BrokerConnectionSupportContruct()
 
 					// Retry post data to get authentication from server
 					var configYamlSupport *support.ConfigYamlSupport
@@ -276,53 +295,17 @@ func initCli() bool {
 					harwareInfoSuppport := support.HardwareInfoSupportConstruct()
 					supportSupport.Register(harwareInfoSuppport)
 
-					// Print the broker connection details in a structured format
+					// Print the broker connection details in a structured format for debugging and verification
 					brokerConnection := configYamlSupport.ConfigData.Broker_connection
 					support.Helper.PrintGroupName("Broker Connection Details:")
 					for key, value := range brokerConnection {
 						support.Helper.PrintGroupName(fmt.Sprintf("  %s: %v", key, value))
 					}
 
-					currentConnection := configYamlSupport.ConfigData.Broker_connection
-					switch currentConnection["type"].(string) {
-					case "nats":
-						// Load the nats library.
-						// Init nats broker.
-						natsBrokerCon := configYamlSupport.GetNatsBrokerCon(configYamlSupport.GetTypeBrokerCon(currentConnection))
-
-						tryRestartProcess(5, func() bool {
-							natSupport, err := support.NatsSupportConstruct(natsBrokerCon)
-							if err != nil {
-								return true
-							}
-							var gg *support.NatsSupport = &natSupport
-							brokerConnectionSupport.RegisterConnection(currentConnection["key"].(string), gg)
-							return false
-						})
-					case "rabbitmq":
-						amqpBrokerCon := configYamlSupport.GetRabbitMQBrokenCon(configYamlSupport.GetTypeBrokerCon(currentConnection))
-						tryRestartProcess(5, func() bool {
-							amqpSupport, err := support.AMQPSupportConstruct(amqpBrokerCon)
-							if err != nil {
-								return true
-							}
-							var gg *support.AMQPSupport = amqpSupport
-							brokerConnectionSupport.RegisterConnection(currentConnection["key"].(string), gg)
-							return false
-						})
-					case "redis":
-						redisBrokerCon := configYamlSupport.GetRedisBrokerCon(configYamlSupport.GetTypeBrokerCon(currentConnection))
-						tryRestartProcess(5, func() bool {
-							redisSupport, err := support.NewRedisSupportConstruct(redisBrokerCon)
-							if err != nil {
-								return true
-							}
-							var gg *support.RedisSupport = redisSupport
-							brokerConnectionSupport.RegisterConnection(currentConnection["key"].(string), gg)
-							return false
-						})
-					}
-
+					// Initialize broker connection support
+					// This will init the broker connection support
+					// and register the connection to the broker connection support
+					brokerConnectionSupport := initBrokerConnections(configYamlSupport)
 					supportSupport.Register(brokerConnectionSupport)
 
 					// Check the own event have regsiter to job manager event
@@ -380,10 +363,6 @@ func initCli() bool {
 
 					go restartProcessFromEventBus()
 
-					// Register gin support
-					ginSupport := support.GinConstruct()
-					supportSupport.Register(ginSupport)
-
 					// --- Signal Handling ---
 					sigs := make(chan os.Signal, 1)
 					signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
@@ -411,6 +390,13 @@ func initCli() bool {
 					}
 
 					supportSupport.Register(configYamlSupport)
+
+					// Initialize broker connection support
+					// This will init the broker connection support
+					// and register the connection to the broker connection support
+					brokerConnectionSupport := initBrokerConnections(configYamlSupport)
+					supportSupport.Register(brokerConnectionSupport)
+
 					var cmdExecArr []*exec.Cmd
 					configYamlSupport.RunExecsProcess(&cmdExecArr)
 					if len(cmdExecArr) == 0 {
@@ -460,10 +446,54 @@ func saveWithoutChange(filePath string) error {
 	return nil
 }
 
-// Example usage in your main function or relevant part of the code:
-// data := []byte("your YAML content here") // Replace with actual YAML content
-// err := saveConfig("config.yaml", data)
-// if err != nil {
-//     fmt.Printf("ERROR: %v\n", err)
-//     // Handle the error appropriately
-// }
+func ginInitialize(router *gin.Engine) {
+	msgNotifController := jobmanager.NewMsgNotifController()
+	router.POST("/msg/notif/:task_id", msgNotifController.AddNotif)
+
+	// This is for local app Communication
+	jobGroup := router.Group("/job")
+	{
+		jobGroup.POST("/create", jobitem.CreateJobHandler)
+	}
+}
+
+func initBrokerConnections(configYamlSupport *support.ConfigYamlSupport) *support.BrokerConnectionSupport {
+	brokerConnectionSupport := support.BrokerConnectionSupportContruct()
+	currentConnection := configYamlSupport.ConfigData.Broker_connection
+	switch currentConnection["type"].(string) {
+	case "nats":
+		natsBrokerCon := configYamlSupport.GetNatsBrokerCon(configYamlSupport.GetTypeBrokerCon(currentConnection))
+		tryRestartProcess(5, func() bool {
+			natSupport, err := support.NatsSupportConstruct(natsBrokerCon)
+			if err != nil {
+				return true
+			}
+			var gg *support.NatsSupport = &natSupport
+			brokerConnectionSupport.RegisterConnection(currentConnection["key"].(string), gg)
+			return false
+		})
+	case "rabbitmq":
+		amqpBrokerCon := configYamlSupport.GetRabbitMQBrokenCon(configYamlSupport.GetTypeBrokerCon(currentConnection))
+		tryRestartProcess(5, func() bool {
+			amqpSupport, err := support.AMQPSupportConstruct(amqpBrokerCon)
+			if err != nil {
+				return true
+			}
+			var gg *support.AMQPSupport = amqpSupport
+			brokerConnectionSupport.RegisterConnection(currentConnection["key"].(string), gg)
+			return false
+		})
+	case "redis":
+		redisBrokerCon := configYamlSupport.GetRedisBrokerCon(configYamlSupport.GetTypeBrokerCon(currentConnection))
+		tryRestartProcess(5, func() bool {
+			redisSupport, err := support.NewRedisSupportConstruct(redisBrokerCon)
+			if err != nil {
+				return true
+			}
+			var gg *support.RedisSupport = redisSupport
+			brokerConnectionSupport.RegisterConnection(currentConnection["key"].(string), gg)
+			return false
+		})
+	}
+	return brokerConnectionSupport
+}

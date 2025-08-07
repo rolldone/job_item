@@ -16,24 +16,7 @@ func ReplaceApp(executablePath string, app_new string) *exec.Cmd {
 	return cmd
 }
 
-// createIndependentCommand is a helper function that creates a Windows command,
-// sets up the environment variables, and the working directory.
-func createIndependentCommand(execConfig ExecConfig, workingDir string) *exec.Cmd {
-	cmd := exec.Command("cmd", "/C", execConfig.Cmd)
-	cmd.Env = append(os.Environ(), "")
-	cmd.Dir = workingDir
-
-	// Set environment variables
-	for key, value := range execConfig.Env {
-		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", key, value))
-	}
-
-	return cmd
-}
-
-// RunChildProcess starts a child process with the current configuration.
-// It returns the command object and any error encountered.
-func (c *ConfigYamlSupport) RunChildProcess() (*exec.Cmd, error) {
+func (c *ConfigYamlSupport) createForChildProcessCommand() (*exec.Cmd, error) {
 	executablePath, err := os.Executable()
 	if err != nil {
 		return nil, err
@@ -63,26 +46,23 @@ func (c *ConfigYamlSupport) RunChildProcess() (*exec.Cmd, error) {
 		cmd = exec.Command(executablePath, "child_process", "--config", config_path)
 	}
 
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		fmt.Println("Error creating stdout pipe:", err)
-		return nil, err
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		fmt.Println("Error creating stderr pipe:", err)
-		return nil, err
-	}
-
-	err = cmd.Start()
-	if err != nil {
-		return nil, err
-	}
-
-	go printOutput(stdout)
-	go printOutput(stderr)
+	cmd.Env = append(os.Environ(), c.GetEnv()...)
 
 	return cmd, nil
+}
+
+// createForExecCommand is a helper function that creates a Windows command,
+// sets up the environment variables, and the working directory.
+func (c *ConfigYamlSupport) createForExecCommand(execConfig ExecConfig, workingDir string) *exec.Cmd {
+	cmd := exec.Command("cmd", "/C", execConfig.Cmd)
+	cmd.Dir = workingDir
+
+	// Set environment variables
+	for key, value := range execConfig.Env {
+		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", key, value))
+	}
+
+	return cmd
 }
 
 // CloseAllGroupProcesses kills each process in cmds.
@@ -102,9 +82,7 @@ func (c *ConfigYamlSupport) CloseAllGroupProcesses(cmds []*exec.Cmd) {
 	}
 }
 
-// RunChildExecsProcess starts a child process for executing commands defined in the configuration.
-// It waits for the process to finish and returns any error encountered.
-func (c *ConfigYamlSupport) RunChildExecsProcess() (*exec.Cmd, error) {
+func (c *ConfigYamlSupport) createForChildExecProcessCommand() (*exec.Cmd, error) {
 	executablePath, err := os.Executable()
 	if err != nil {
 		return nil, err
@@ -118,47 +96,13 @@ func (c *ConfigYamlSupport) RunChildExecsProcess() (*exec.Cmd, error) {
 		executablePath = fmt.Sprint(pwd, "/", *c.child_process_app)
 	}
 	var cmd *exec.Cmd
-	os_type := runtime.GOOS
 	config_path := c.Config_path
 
 	if config_path == "" {
 		config_path = "config.yaml"
 	}
 
-	switch os_type {
-	case "windows":
-		cmd = exec.Command(executablePath, "child_execs_process", "--config", config_path)
-	case "darwin":
-		cmd = exec.Command(executablePath, "child_execs_process", "--config", config_path)
-	case "linux":
-		cmd = exec.Command(executablePath, "child_execs_process", "--config", config_path)
-	}
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		fmt.Println("Error creating stdout pipe:", err)
-		return nil, err
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		fmt.Println("Error creating stderr pipe:", err)
-		return nil, err
-	}
-
-	err = cmd.Start()
-	if err != nil {
-		return nil, err
-	}
-
-	go printOutput(stdout)
-	go printOutput(stderr)
-
-	// Wait for the command to finish
-	// err = cmd.Wait()
-	// if err != nil {
-	// 	fmt.Println("Error waiting for command:", err)
-	// 	return nil, err
-	// }
+	cmd = exec.Command(executablePath, "child_execs_process", "--config", config_path)
 
 	return cmd, nil
 }

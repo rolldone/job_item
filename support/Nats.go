@@ -119,37 +119,41 @@ func (c *NatsSupport) Sub(topic string, group_id string, callback func(message s
 }
 
 // Interface from BrokerConnectionInterface
-func (c *NatsSupport) SubSync(uuidItem string, group_id string, callback func(message string, err error), opts SubSyncOpts) error {
+// Improved: Waits for a message up to the specified duration. Returns (isTimeout, error).
+func (c *NatsSupport) SubSync(uuidItem string, group_id string, callback func(message string, err error), opts SubSyncOpts) (bool, error) {
 	unsubribce, err := c.nc.QueueSubscribeSync(uuidItem, group_id)
 	if err != nil {
 		log.Fatal(err)
-		return err
+		return true, err
 	}
-	messageCount := 0
-	maxMessages := opts.Timeout_second // Maximum number of timeout process
-	for messageCount < maxMessages {
-		// Wait for a message
-		msg, err := unsubribce.NextMsg(1 * time.Second) // Timeout after 5 seconds if no message
+
+	// Calculate deadline
+	deadline := time.Now().Add(time.Duration(opts.Timeout_second) * time.Second)
+	var msg *nats.Msg
+
+	for time.Now().Before(deadline) {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			break
+		}
+		msg, err = unsubribce.NextMsg(remaining)
 		if err != nil {
 			if err == nats.ErrTimeout {
-				fmt.Println("Timed out waiting for a message.", (messageCount + 1))
-				messageCount++
+				// Timed out waiting for a message in this interval, but check total deadline
 				continue
 			}
-			log.Fatal(err)
+			unsubribce.Unsubscribe()
+			return true, err // Some other error
 		}
-
-		// Process the received message
+		// Got a message
 		fmt.Printf("\n unSubscribeFinish: %s\n", msg.Data)
 		callback(string(msg.Data), nil)
 		unsubribce.Unsubscribe()
-		break
+		return false, nil
 	}
-	if messageCount >= maxMessages {
-		unsubribce.Unsubscribe()
-		callback("", fmt.Errorf("timeout"))
-	}
-	return nil
+	// If we reach here, timeout occurred
+	unsubribce.Unsubscribe()
+	return true, nil
 }
 
 // Interface from BrokerConnectionInterface
@@ -167,33 +171,40 @@ func (c *NatsSupport) BasicSub(topic string, callback func(message string)) (fun
 }
 
 // Interface from BrokerConnectionInterface
-func (c *NatsSupport) BasicSubSync(uuidItem string, callback func(message string, err error), opts SubSyncOpts) error {
+func (c *NatsSupport) BasicSubSync(uuidItem string, callback func(message string, err error), opts SubSyncOpts) (bool, error) {
 	unsubribce, err := c.nc.SubscribeSync(uuidItem)
 	if err != nil {
 		log.Fatal(err)
-		return err
+		return true, err
 	}
 
-	var finish bool
-	var errr error
+	// Calculate deadline
+	deadline := time.Now().Add(time.Duration(opts.Timeout_second) * time.Second)
 	var msg *nats.Msg
 
-	for !finish {
-		msg, err = unsubribce.NextMsg(1 * time.Second) // Timeout after 5 seconds if no message
+	for time.Now().Before(deadline) {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			break
+		}
+		msg, err = unsubribce.NextMsg(remaining)
 		if err != nil {
 			if err == nats.ErrTimeout {
-				fmt.Println("Timed out waiting for a message.")
-				// messageCount++
+				// Timed out waiting for a message in this interval, but check total deadline
+				continue
 			}
-			continue
+			unsubribce.Unsubscribe()
+			return true, err // Some other error
 		}
-		finish = true
+		// Got a message
+		fmt.Printf("\n unSubscribeFinish: %s\n", msg.Data)
+		callback(string(msg.Data), nil)
+		unsubribce.Unsubscribe()
+		return false, nil
 	}
-	// Process the received message
-	fmt.Printf("\n unSubscribeFinish: %s\n", msg.Data)
-	callback(string(msg.Data), nil)
+	// If we reach here, timeout occurred
 	unsubribce.Unsubscribe()
-	return errr
+	return true, nil
 }
 
 // Interface from BrokerConnectionInterface

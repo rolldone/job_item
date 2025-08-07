@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"job_item/src/helper"
+	support_helper "job_item/support/helper"
 	"job_item/support/model"
 	"log"
 	"net/http"
@@ -25,6 +26,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -110,15 +112,20 @@ type Credential struct {
 }
 
 type ExecConfig struct {
-	Name        string            `yaml:"name"`
-	Key         string            `yaml:"key"`
-	Cmd         string            `yaml:"cmd"`
-	Env         map[string]string `yaml:"env"`
-	Working_dir string            `yaml:"working_dir"` // Add Working_dir field
+	Name         string            `yaml:"name"`
+	Key          string            `yaml:"key"`
+	Cmd          string            `yaml:"cmd"`
+	Env          map[string]string `yaml:"env"`
+	Working_dir  string            `yaml:"working_dir"`  // Add Working_dir field
+	Cascade_exit bool              `yaml:"cascade_exit"` // Add Cascade_exit field
 }
 
 type ConfigData struct {
-	End_point  string     `yaml:"end_point"`
+	// Unique Identity ID for the job item
+	Identity_id string `yaml:"identity_id"`
+	// End point for the job item service
+	End_point string `yaml:"end_point"`
+	// Credential for the job item
 	Credential Credential `yaml:"credential"`
 	// Import
 	Uuid                    string
@@ -199,6 +206,19 @@ func (c *ConfigYamlSupport) LoadConfigYaml() {
 		panic(1)
 	}
 	c.ConfigData = ConfigData{}
+
+	// Generate a new UUID for the Identity_id
+	identityId := os.Getenv("JOB_ITEM_IDENTITY_ID")
+	if identityId == "" {
+		idenityIdNew, err := support_helper.GenerateUUIDv7()
+		if err != nil {
+			fmt.Println("Failed to generate UUID:", err)
+			panic(1)
+		}
+		identityId = idenityIdNew
+	}
+	c.ConfigData.Identity_id = identityId
+
 	err = yaml.Unmarshal(yamlFile, &c.ConfigData)
 	if err != nil {
 		log.Fatalf("Unmarshal: %v", err)
@@ -208,6 +228,31 @@ func (c *ConfigYamlSupport) LoadConfigYaml() {
 // useEnvToYamlValue updates the configuration values using environment variables.
 func (c *ConfigYamlSupport) useEnvToYamlValue() {
 	helper.Fromenv(&c.ConfigData)
+}
+
+func (c *ConfigYamlSupport) GetEnv() []string {
+	baseURL := "http://localhost:"
+	baseURL += strconv.Itoa(Helper.Gin.Port)
+
+	return []string{
+		// For child and child exec processes
+		"JOB_ITEM_IDENTITY_ID=" + c.ConfigData.Identity_id,
+		"JOB_ITEM_BASE_URL=" + baseURL,
+	}
+}
+
+func (c *ConfigYamlSupport) GetEnvForExecProcess() []string {
+	baseURL := os.Getenv("JOB_ITEM_BASE_URL")
+
+	return []string{
+		// For child exec processes, set the JOB_ITEM_XXX
+		"JOB_ITEM_APP_ID=" + c.ConfigData.Uuid,
+		"JOB_ITEM_BASE_URL=" + baseURL,
+		"JOB_ITEM_CREATE_URL=" + baseURL + "/job/create",
+		"JOB_ITEM_LISTEN_LOG=" + baseURL + "/job/listen/job_record/:job_record_uuid/log",
+		"JOB_ITEM_LISTEN_NOTIF=" + baseURL + "/job/listen/job_record/:job_record_uuid/notif",
+		"JOB_ITEM_LISTEN_ACTION=" + baseURL + "/job/job_record/:job_record_uuid/action/:action",
+	}
 }
 
 // loadServerCOnfig requests the configuration from the server and updates the ConfigData.
@@ -649,10 +694,89 @@ func (c ConfigYamlSupport) GetRedisBrokerCon(gg BrokerConInterface) RedisBrokerC
 	return kk
 }
 
+// RunChildProcess starts a child process with the current configuration.
+// It returns the command object and any error encountered.
+func (c *ConfigYamlSupport) RunChildProcess() (*exec.Cmd, error) {
+	cmd, err := c.createForChildProcessCommand()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create command for child process: %w", err)
+	}
+
+	// Set environment variables for the command
+	cmd.Env = append(os.Environ(), c.GetEnv()...)
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		fmt.Println("Error creating stdout pipe:", err)
+		return nil, err
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		fmt.Println("Error creating stderr pipe:", err)
+		return nil, err
+	}
+
+	err = cmd.Start()
+	if err != nil {
+		return nil, err
+	}
+
+	go printOutput(stdout)
+	go printOutput(stderr)
+
+	// Wait for the command to finish with a timeout
+	err = waitWithTimeout(cmd, 2*time.Second)
+	if err != nil {
+		Helper.PrintErrName(fmt.Sprintf("Error waiting for command: %v\n", err), "ERR-20230903202")
+		return nil, err
+	}
+
+	return cmd, nil
+}
+
+// RunChildExecsProcess starts a child process for executing commands defined in the configuration.
+// It waits for the process to finish and returns any error encountered.
+func (c *ConfigYamlSupport) RunChildExecsProcess() (*exec.Cmd, error) {
+	cmd, err := c.createForChildExecProcessCommand()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create command for child exec process: %w", err)
+	}
+	// Set environment variables for the command
+	cmd.Env = append(os.Environ(), c.GetEnv()...)
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		fmt.Println("Error creating stdout pipe:", err)
+		return nil, err
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		fmt.Println("Error creating stderr pipe:", err)
+		return nil, err
+	}
+
+	err = cmd.Start()
+	if err != nil {
+		return nil, err
+	}
+
+	go printOutput(stdout)
+	go printOutput(stderr)
+
+	// Wait for the command to finish
+	// err = cmd.Wait()
+	// if err != nil {
+	// 	fmt.Println("Error waiting for command:", err)
+	// 	return nil, err
+	// }
+
+	return cmd, nil
+}
+
 // RunExecsProcess runs all exec commands defined in the configuration.
 // It captures their output, retries on failure, and handles timeouts.
 func (c *ConfigYamlSupport) RunExecsProcess(cmd *[]*exec.Cmd) {
-	retryCount := 5               // Number of retry attempts
+	retryCountFirstStart := 5     // Number of retry attempts
 	retryDelay := 2 * time.Second // Delay between retries
 
 	for _, execConfig := range c.ConfigData.Execs {
@@ -664,12 +788,12 @@ func (c *ConfigYamlSupport) RunExecsProcess(cmd *[]*exec.Cmd) {
 			workingDir = filepath.Join(filepath.Dir(c.Config_path), workingDir)
 		}
 
-		for attempt := 1; attempt <= retryCount; attempt++ {
+		for attempt := 1; attempt <= retryCountFirstStart; attempt++ {
 
-			restartAttempts := 100 // Number of restart attempts
+			totalRestartAttempts := 2 // Number of restart attempts
 
 			// Create the command
-			cmdItem := NewMonitoredCmd(createIndependentCommand(execConfig, workingDir))
+			cmdItem := NewMonitoredCmd(c.createForExecCommand(execConfig, workingDir))
 			*cmd = append(*cmd, cmdItem.Cmd)
 
 			// Use the helper function to set up pipes
@@ -686,12 +810,12 @@ func (c *ConfigYamlSupport) RunExecsProcess(cmd *[]*exec.Cmd) {
 			// Start the command
 			err = cmdItem.Cmd.Start()
 			if err != nil {
-				Helper.PrintErrName(fmt.Sprintf("Error starting command for %s (Attempt %d/%d): %v\n", execConfig.Name, attempt, retryCount, err), "ERR-CMD-START")
+				Helper.PrintErrName(fmt.Sprintf("Error starting command for %s (Attempt %d/%d): %v\n", execConfig.Name, attempt, retryCountFirstStart, err), "ERR-CMD-START")
 				*cmd = (*cmd)[:len(*cmd)-1] // Remove the last command if there's an error
-				if attempt == retryCount {
-					Helper.PrintErrName(fmt.Sprintf("Failed to execute command for %s after %d attempts\n", execConfig.Name, retryCount), "ERR-CMD-FAIL")
+				if attempt == retryCountFirstStart {
+					Helper.PrintErrName(fmt.Sprintf("Failed to execute command for %s after %d attempts\n", execConfig.Name, retryCountFirstStart), "ERR-CMD-FAIL")
 				}
-				if attempt < retryCount {
+				if attempt < retryCountFirstStart {
 					Helper.PrintGroupName(fmt.Sprintf("Retrying command for %s after %v...\n", execConfig.Name, retryDelay))
 					time.Sleep(retryDelay) // Add delay before retrying
 				}
@@ -703,7 +827,7 @@ func (c *ConfigYamlSupport) RunExecsProcess(cmd *[]*exec.Cmd) {
 
 			// Wait for the command and handle restarts
 			go func(cmdItem *MonitoredCmd, execName string) {
-				for restartAttempt := 0; restartAttempt < restartAttempts; restartAttempt++ {
+				for restartAttempt := 0; restartAttempt <= totalRestartAttempts; restartAttempt++ {
 					err := cmdItem.Wait()
 					if err != nil {
 						for in, c := range *cmd {
@@ -712,11 +836,24 @@ func (c *ConfigYamlSupport) RunExecsProcess(cmd *[]*exec.Cmd) {
 								break
 							}
 						}
-						Helper.PrintErrName(fmt.Sprintf("Command '%s' finished with error: %v. Restarting... (Attempt %d/%d)\n", execName, err, restartAttempt+1, restartAttempts), "ERR-234233432")
 
-						time.Sleep(3 * time.Second) // Wait before restarting
+						if restartAttempt == totalRestartAttempts {
+							Helper.PrintErrName(fmt.Sprintf("Command '%s' failed after %d attempts. Giving up.\n", execName, totalRestartAttempts), "ERR-2344233432")
+							c.ShutdownMainProcess()
+							break
+						}
 
-						cmdItem = NewMonitoredCmd(createIndependentCommand(execConfig, workingDir))
+						Helper.PrintErrName(fmt.Sprintf("Command '%s' finished with error: %v. Restarting... (Attempt %d/%d)\n", execName, err, restartAttempt+1, totalRestartAttempts), "ERR-234233432")
+
+						if execConfig.Cascade_exit {
+							Helper.PrintGroupName(fmt.Sprintf("Cascade exit enabled for command '%s'. Exiting process.\n", execName))
+							c.ShutdownMainProcess()
+							break
+						}
+
+						time.Sleep(2 * time.Second) // Wait before restarting
+
+						cmdItem = NewMonitoredCmd(c.createForExecCommand(execConfig, workingDir))
 
 						stdout, stderr, err := setupCommandPipes(cmdItem.Cmd, execConfig.Name)
 						if err != nil {
@@ -738,6 +875,10 @@ func (c *ConfigYamlSupport) RunExecsProcess(cmd *[]*exec.Cmd) {
 								break
 							}
 						}
+						if execConfig.Cascade_exit {
+							Helper.PrintGroupName(fmt.Sprintf("Cascade exit enabled for command '%s'. Exiting process.\n", execName))
+							c.ShutdownMainProcess()
+						}
 						break
 					}
 				}
@@ -746,6 +887,33 @@ func (c *ConfigYamlSupport) RunExecsProcess(cmd *[]*exec.Cmd) {
 			break // Exit retry loop on success
 		}
 	}
+}
+
+func (c *ConfigYamlSupport) ListenForShutdownFromConn(conn BrokerConnectionInterface) {
+	identityId := os.Getenv("JOB_ITEM_IDENTITY_ID")
+	if identityId == "" {
+		identityId = c.ConfigData.Identity_id
+	}
+	_, err := conn.BasicSub(identityId+".shutdown", func(msg string) {
+		fmt.Println("Received shutdown signal from broker connection")
+		p, _ := os.FindProcess(os.Getpid())
+		p.Signal(syscall.SIGINT)
+	})
+	if err != nil {
+		fmt.Println("Error subscribing to shutdown signal:", err)
+		return
+	}
+}
+
+func (c *ConfigYamlSupport) ShutdownMainProcess() {
+	identityId := os.Getenv("JOB_ITEM_IDENTITY_ID")
+	fmt.Println("Shutting down main process with identity ID:", identityId)
+	conn := Helper.BrokerConnection.GetConnection(c.ConfigData.Broker_connection["key"].(string))
+	if conn == nil {
+		fmt.Println("No broker connection available")
+		return
+	}
+	conn.Pub(identityId+".shutdown", "")
 }
 
 // monitorCommand listens for when an *exec.Cmd exits, either successfully or with an error.

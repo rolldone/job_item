@@ -9,14 +9,14 @@ var BROKER_REFRESH_PUBSUB = "refresh_pubsub"
 type BrokerConnectionInterface interface {
 	Pub(topic string, msg string)
 	Sub(uuidItem string, group string, callback func(message string)) (func(), error)
-	SubSync(uuidItem string, group string, callback func(message string, err error), opts SubSyncOpts) error
+	SubSync(uuidItem string, group string, callback func(message string, err error), opts SubSyncOpts) (bool, error)
 	GetBroker_P() any
 	SetKey_P(key string)
 	GetKey_P() string
 	IsConnected() bool
 	GetRefreshPubSub() string
 	BasicSub(topic string, callback func(message string)) (func(), error)
-	BasicSubSync(topic string, callback func(message string, err error), opts SubSyncOpts) error
+	BasicSubSync(topic string, callback func(message string, err error), opts SubSyncOpts) (bool, error)
 }
 
 func BrokerConnectionSupportContruct() *BrokerConnectionSupport {

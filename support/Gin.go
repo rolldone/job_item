@@ -2,16 +2,22 @@ package support
 
 import (
 	"fmt"
-	"net/http"
 	"time"
 
-	"encoding/json"
 	"net"
 
 	"github.com/gin-gonic/gin"
+	"github.com/zishang520/engine.io/v2/log"
+	"github.com/zishang520/engine.io/v2/types"
+	"github.com/zishang520/socket.io/v2/socket"
 )
 
 // Import net
+
+// Post data message handler
+type MsgAddRequest struct {
+	Msg string `json:"msg" binding:"required"`
+}
 
 func GinConstruct() *GinSupport {
 	ginSupport := GinSupport{}
@@ -23,7 +29,7 @@ func GinConstruct() *GinSupport {
 }
 
 type GinSupport struct {
-	router *gin.Engine
+	Router *gin.Engine
 	Port   int
 	// ...existing code...
 }
@@ -37,62 +43,59 @@ func (c *GinSupport) GetObject() any {
 	return c
 }
 
+func (g *GinSupport) StartSocket() {
+	log.DEBUG = true
+	c := socket.DefaultServerOptions()
+	c.SetServeClient(true)
+	// c.SetConnectionStateRecovery(&socket.ConnectionStateRecovery{})
+	// c.SetAllowEIO3(true)
+	c.SetPingInterval(300 * time.Millisecond)
+	c.SetPingTimeout(200 * time.Millisecond)
+	c.SetMaxHttpBufferSize(1000000)
+	c.SetConnectTimeout(1000 * time.Millisecond)
+	c.SetTransports(types.NewSet("polling", "webtransport"))
+	c.SetCors(&types.Cors{
+		Origin:      "*",
+		Credentials: true,
+	})
+	socketio := socket.NewServer(nil, nil)
+	socketio.On("connection", func(clients ...interface{}) {
+		client := clients[0].(*socket.Socket)
+
+		client.On("message", func(args ...interface{}) {
+			client.Emit("message-back", args...)
+		})
+		client.Emit("auth", client.Handshake().Auth)
+
+		client.On("message-with-ack", func(args ...interface{}) {
+			ack := args[len(args)-1].(socket.Ack)
+			ack(args[:len(args)-1], nil)
+		})
+	})
+
+	socketio.Of("/custom", nil).On("connection", func(clients ...interface{}) {
+		client := clients[0].(*socket.Socket)
+		client.Emit("auth", client.Handshake().Auth)
+	})
+
+}
+
 func (g *GinSupport) StartBaseRoute() {
 
 	// Set Gin to release mode for production
 	gin.SetMode(gin.ReleaseMode)
 
 	// Initialize Gin's default router.
-	g.router = gin.Default()
+	g.Router = gin.Default()
 
 	// Display the gin logger.
-	g.router.Use(gin.Logger())
+	g.Router.Use(gin.Logger())
 
 	// Define a route handler.
-	g.router.GET("/", func(c *gin.Context) {
+	g.Router.GET("/", func(c *gin.Context) {
 		c.JSON(200, gin.H{
 			"message": "Hello, Gin!",
 		})
-	})
-
-	// Post data message handler
-	type MsgAddRequest struct {
-		Msg string `json:"msg" binding:"required"`
-	}
-
-	g.router.POST("/msg/notif/:task_id", func(c *gin.Context) {
-		task_id := c.Param("task_id")
-		var req MsgAddRequest
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-		if len(req.Msg) > 102400 { // Check if the message length exceeds 100KB
-			c.JSON(http.StatusBadRequest, gin.H{"error": "msg exceeds 100KB limit"})
-			return
-		}
-
-		currentConnection := Helper.ConfigYaml.ConfigData.Broker_connection
-		conn := Helper.BrokerConnection.GetConnection(currentConnection["key"].(string))
-		if conn == nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get broker connection"})
-			return
-		}
-
-		payload := map[string]string{
-			"msg":        req.Msg,
-			"created_at": time.Now().Format(time.RFC3339),
-			"status":     GetStatus().STATUS_PROCESS,
-		}
-		jsonBytes, err := json.Marshal(payload)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to marshal payload"})
-			return
-		}
-		conn.Pub(fmt.Sprint(task_id, ".", "notif_add"), string(jsonBytes))
-
-		// Process the validated data
-		c.JSON(http.StatusOK, gin.H{"status": "success", "return": req})
 	})
 
 	go func() {
@@ -105,9 +108,8 @@ func (g *GinSupport) StartBaseRoute() {
 		g.Port = listener.Addr().(*net.TCPAddr).Port
 
 		// Start Gin using the listener
-		if err := g.router.RunListener(listener); err != nil {
+		if err := g.Router.RunListener(listener); err != nil {
 			panic(err)
 		}
 	}()
-
 }

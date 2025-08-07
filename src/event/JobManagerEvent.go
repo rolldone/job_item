@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
-	"strconv"
 	"time"
 
 	"github.com/hoisie/mustache"
@@ -218,14 +217,27 @@ func (c *JobManagerEventItem) RunGoroutine(command string, task_id string) {
 	} else {
 		cmd = exec.Command("bash", "-c", command)
 	}
+
+	// jobManagerEventResultURL := helper.ReplaceKeysInURL(os.Getenv("JOB_MANAGER_RESULT_URL"), []map[string]string{
+	// 	{":task_id": task_id},
+	// })
+	// jobManagerUploadFile := helper.ReplaceKeysInURL(os.Getenv("JOB_MANAGER_UPLOAD_FILE"), []map[string]string{
+	// 	{":task_id": task_id},
+	// })
+	// jobManagerMsgNotifHost := helper.ReplaceKeysInURL(os.Getenv("JOB_ITEM_MSG_NOTIF_HOST"), []map[string]string{
+	// 	{":task_id": task_id},
+	// })
+
 	envInvolve := append(os.Environ(),
+		// For child processes
+		// You need replace :task_id with the actual task ID on the child process
 		"JOB_MANAGER_HOST="+support.Helper.ConfigYaml.ConfigData.End_point,
 		"JOB_MANAGER_RESULT_URL="+support.Helper.ConfigYaml.ConfigData.End_point+"/api/worker/job_record/result/"+task_id,
 		"JOB_MANAGER_UPLOAD_FILE="+support.Helper.ConfigYaml.ConfigData.End_point+"/api/worker/job_record/file/"+task_id,
 		"JOB_ITEM_TASK_ID="+task_id,
 		"JOB_ITEM_PROJECT_ID="+support.Helper.ConfigYaml.ConfigData.Credential.Project_id,
 		"JOB_ITEM_PROJECT_KEY="+support.Helper.ConfigYaml.ConfigData.Credential.Secret_key,
-		"JOB_ITEM_MSG_NOTIF_HOST=http://localhost:"+strconv.Itoa(support.Helper.Gin.Port)+"/msg/notif/"+task_id,
+		"JOB_ITEM_MSG_NOTIF_HOST="+os.Getenv("JOB_ITEM_BASE_URL")+"/msg/notif/"+task_id,
 	)
 	cmd.Env = envInvolve
 	c.WatchProcessCMD(cmd, task_id)
