@@ -118,6 +118,7 @@ type ExecConfig struct {
 	Env          map[string]string `yaml:"env"`
 	Working_dir  string            `yaml:"working_dir"`  // Add Working_dir field
 	Cascade_exit bool              `yaml:"cascade_exit"` // Add Cascade_exit field
+	Attempt      int               `yaml:"attempt"`      // Add Attempt field
 }
 
 type ConfigData struct {
@@ -790,7 +791,10 @@ func (c *ConfigYamlSupport) RunExecsProcess(cmd *[]*exec.Cmd) {
 
 		for attempt := 1; attempt <= retryCountFirstStart; attempt++ {
 
-			totalRestartAttempts := 2 // Number of restart attempts
+			totalRestartAttempts := execConfig.Attempt
+			if totalRestartAttempts <= 0 {
+				totalRestartAttempts = 3 // Default to 3 attempts if not specified
+			}
 
 			// Create the command
 			cmdItem := NewMonitoredCmd(c.createForExecCommand(execConfig, workingDir))
