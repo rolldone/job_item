@@ -126,9 +126,9 @@ func main() {
 		support.Helper.PrintErrName("Error getting hardware info: "+err.Error(), "ERR-30350903208")
 		panic(1)
 	}
-	support.Helper.PrintGroupName("----------------------------------------------------")
+	support.Helper.PrintGroupName("--------------------------------------------------------------------------")
 	support.Helper.PrintGroupName("Job Item Identity ID :: " + configYamlSupport.ConfigData.Identity_id)
-	support.Helper.PrintGroupName("----------------------------------------------------")
+	support.Helper.PrintGroupName("--------------------------------------------------------------------------")
 	support.Helper.PrintGroupName("Hardware Identification")
 	support.Helper.PrintGroupName("hostID :: " + hostInfo.HostID)
 	support.Helper.PrintGroupName("hostname :: " + hostInfo.Hostname)
@@ -136,7 +136,7 @@ func main() {
 	support.Helper.PrintGroupName("platform :: " + hostInfo.Platform)
 	support.Helper.PrintGroupName("kernelArch :: " + hostInfo.KernelArch)
 	support.Helper.PrintGroupName("kernelVersion :: " + hostInfo.KernelVersion)
-	support.Helper.PrintGroupName("----------------------------------------------------")
+	support.Helper.PrintGroupName("--------------------------------------------------------------------------")
 
 	// Listen interupt signal
 	signalChan := make(chan os.Signal, 1)
@@ -395,13 +395,6 @@ func initCli() bool {
 						support.Helper.PrintErrName("Error initializing config yaml support: "+err.Error(), "ERR-3035090233202")
 						return err
 					}
-					// configYamlSupport, err := support.ConfigYamlSupportContruct(support.ConfigYamlSupportConstructPropsType{
-					// 	Config_path: ctx.String("config"),
-					// })
-					// if err != nil {
-					// 	support.Helper.PrintErrName("Error initializing config yaml support: "+err.Error(), "ERR-30350903702")
-					// 	return err
-					// }
 
 					supportSupport.Register(&configYamlSupport)
 
