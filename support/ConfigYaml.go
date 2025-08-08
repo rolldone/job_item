@@ -140,9 +140,7 @@ type ConfigData struct {
 }
 
 type ConfigYamlSupportConstructPropsType struct {
-	// LoadConfigYaml loads the configuration from a YAML file.
-	RequestToServer bool
-	Config_path     string
+	Config_path string
 }
 
 func ConfigYamlSupportContruct(props ConfigYamlSupportConstructPropsType) (*ConfigYamlSupport, error) {
@@ -170,18 +168,13 @@ func ConfigYamlSupportContruct(props ConfigYamlSupportConstructPropsType) (*Conf
 
 	gg.LoadConfigYaml()
 	gg.useEnvToYamlValue()
-	if props.RequestToServer {
-		if gg.ConfigData.End_point != "" {
-			err = gg.loadServerCOnfig()
-			if err != nil {
-				return nil, err
-			}
-		} else {
-			gg.printGroupName("WARNING: End point is not set, using local config only")
-			// If not requesting from server, set Uuid to Project_id
-			gg.ConfigData.Uuid = gg.ConfigData.Credential.Project_id
+	if gg.ConfigData.End_point != "" {
+		err = gg.loadServerCOnfig()
+		if err != nil {
+			return nil, err
 		}
 	} else {
+		gg.printGroupName("WARNING: End point is not set, using local config only")
 		// If not requesting from server, set Uuid to Project_id
 		gg.ConfigData.Uuid = gg.ConfigData.Credential.Project_id
 	}
@@ -235,10 +228,16 @@ func (c *ConfigYamlSupport) GetEnv() []string {
 	baseURL := "http://localhost:"
 	baseURL += strconv.Itoa(Helper.Gin.Port)
 
+	configData, err := json.Marshal(c.ConfigData)
+	if err != nil {
+		c.printGroupName("Error marshalling ConfigData to JSON: " + err.Error())
+		panic(1)
+	}
 	return []string{
 		// For child and child exec processes
 		"JOB_ITEM_IDENTITY_ID=" + c.ConfigData.Identity_id,
 		"JOB_ITEM_BASE_URL=" + baseURL,
+		"JOB_ITEM_CONFIG_DATA=" + string(configData),
 	}
 }
 
@@ -260,6 +259,21 @@ func (c *ConfigYamlSupport) GetEnvForExecProcess() []string {
 // It returns an error if the request fails or the response is invalid.
 func (c *ConfigYamlSupport) loadServerCOnfig() error {
 	var param = map[string]interface{}{}
+
+	if os.Getenv("JOB_ITEM_CONFIG_DATA") != "" {
+		// If JOB_ITEM_CONFIG_DATA is set, use it as the config data
+		configDataString := os.Getenv("JOB_ITEM_CONFIG_DATA")
+		var configData ConfigData
+		err := json.Unmarshal([]byte(configDataString), &configData)
+		if err != nil {
+			c.printGroupName("Error unmarshalling JOB_ITEM_CONFIG_DATA: " + err.Error())
+			panic(1)
+		}
+		c.ConfigData = configData
+		c.printGroupName("Using JOB_ITEM_CONFIG_DATA from environment variable")
+		return nil
+	}
+
 	param["project_id"] = c.ConfigData.Credential.Project_id
 	param["secret_key"] = c.ConfigData.Credential.Secret_key
 

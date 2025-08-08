@@ -42,8 +42,7 @@ func main() {
 		fmt.Println(err)
 		panic(1)
 	}
-
-	configYamlSupport := support.Helper.ConfigYaml
+	var configYamlSupport *support.ConfigYamlSupport = support.Helper.ConfigYaml
 	if configYamlSupport.ConfigData.Job_item_version_number > VERSION_NUMBER {
 		// fmt.Println(configYamlSupport.ConfigData.Job_item_version_number, "::", VERSION_NUMBER)
 		support.Helper.PrintGroupName("Download New Version :: " + configYamlSupport.ConfigData.Job_item_link)
@@ -65,7 +64,7 @@ func main() {
 	run_child <- "start"
 	cmdExec, err := configYamlSupport.RunChildExecsProcess()
 	if err != nil {
-		support.Helper.PrintErrName("Error starting exec process: "+err.Error(), "ERR-30350903200")
+		support.Helper.PrintErrName("Error starting exec process: "+err.Error(), "ERR-303509T3200")
 		panic(1)
 	}
 	cmd, err := configYamlSupport.RunChildProcess()
@@ -162,6 +161,12 @@ func main() {
 		case "start":
 			support.Helper.PrintGroupName("Starting job_item process")
 		case "restart":
+			err := initMain(configYamlSupport, configYamlSupport.Config_path)
+			if err != nil {
+				support.Helper.PrintErrName("Error initializing config yaml support: "+err.Error(), "ERR-30350903201")
+				panic(1)
+			}
+
 			cmd, err = configYamlSupport.RunChildProcess()
 			if err != nil {
 				support.Helper.PrintErrName("Error starting child process: "+err.Error(), "ERR-20350903201")
@@ -193,6 +198,55 @@ func tryRestartProcess(waitingRecursive int, callback func() bool) {
 	}
 }
 
+func initializeConfigYamlSupport(configYamlSupport *support.ConfigYamlSupport, config string) error {
+	var err error
+	totalCountRequest := 3
+	for range totalCountRequest {
+		confItem, err := support.ConfigYamlSupportContruct(support.ConfigYamlSupportConstructPropsType{
+			Config_path: config,
+		})
+		if err != nil {
+			support.Helper.PrintErrName("Error initializing config yaml support: "+err.Error(), "ERR-3030903200")
+			time.Sleep(time.Duration(time.Second) * 3)
+			support.Helper.PrintGroupName("Retry connection")
+
+			continue
+		}
+		*configYamlSupport = *confItem
+		err = nil
+		break
+	}
+	return err
+}
+
+func initMain(configYamlSupport *support.ConfigYamlSupport, config string) error {
+	supportSupport := support.SupportConstruct("Main")
+
+	// Retry post data to get authentication from server
+	err := initializeConfigYamlSupport(configYamlSupport, config)
+	if err != nil {
+		support.Helper.PrintErrName("Error initializing config yaml support: "+err.Error(), "ERR-303509ff03200")
+		return err
+	}
+	supportSupport.Register(configYamlSupport)
+
+	// Initialize broker connection support
+	// This will init the broker connection support
+	// and register the connection to the broker connection support
+	brokerConnectionSupport := initBrokerConnections(configYamlSupport)
+	supportSupport.Register(brokerConnectionSupport)
+
+	// Listen signal shutdown from child and child exec process
+	conn := brokerConnectionSupport.GetConnection(configYamlSupport.ConfigData.Broker_connection["key"].(string))
+	configYamlSupport.ListenForShutdownFromConn(conn)
+
+	// Register gin support
+	ginSupport := support.GinConstruct()
+	supportSupport.Register(ginSupport)
+	ginInitialize(ginSupport.Router)
+	return nil
+}
+
 func initCli() bool {
 	var flag string
 
@@ -217,42 +271,8 @@ func initCli() bool {
 		// This is without nested command
 		// Example job_item --config=/var/www/html/config.yaml
 		Action: func(ctx *cli.Context) error {
-			supportSupport := support.SupportConstruct("Main")
-
-			// Retry post data to get authentication from server
-			var configYamlSupport *support.ConfigYamlSupport
-			retryRequest := true
-			for retryRequest {
-				confItem, err := support.ConfigYamlSupportContruct(support.ConfigYamlSupportConstructPropsType{
-					RequestToServer: false,
-					Config_path:     ctx.String("config"),
-				})
-				configYamlSupport = confItem
-				if err != nil {
-					retryRequest = true
-					time.Sleep(time.Duration(time.Second) * 5)
-					support.Helper.PrintGroupName("Retry connection")
-					continue
-				}
-				retryRequest = false
-				supportSupport.Register(configYamlSupport)
-			}
-
-			// Initialize broker connection support
-			// This will init the broker connection support
-			// and register the connection to the broker connection support
-			brokerConnectionSupport := initBrokerConnections(configYamlSupport)
-			supportSupport.Register(brokerConnectionSupport)
-
-			// Listen signal shutdown from child and child exec process
-			conn := brokerConnectionSupport.GetConnection(configYamlSupport.ConfigData.Broker_connection["key"].(string))
-			configYamlSupport.ListenForShutdownFromConn(conn)
-
-			// Register gin support
-			ginSupport := support.GinConstruct()
-			supportSupport.Register(ginSupport)
-			ginInitialize(ginSupport.Router)
-
+			var configYamlSupport support.ConfigYamlSupport
+			initMain(&configYamlSupport, ctx.String("config"))
 			return nil
 		},
 
@@ -270,24 +290,13 @@ func initCli() bool {
 					supportSupport := support.SupportConstruct("Child")
 
 					// Retry post data to get authentication from server
-					var configYamlSupport *support.ConfigYamlSupport
-					retryRequest := true
-					for retryRequest {
-						_configYamlSupport, err := support.ConfigYamlSupportContruct(support.ConfigYamlSupportConstructPropsType{
-							RequestToServer: true,
-							Config_path:     ctx.String("config"),
-						})
-						configYamlSupport = _configYamlSupport
-						if err != nil {
-							retryRequest = true
-							time.Sleep(time.Duration(time.Second) * 5)
-							support.Helper.PrintGroupName("Retry connection")
-							continue
-						}
-						retryRequest = false
-						supportSupport.Register(configYamlSupport)
-						break
+					var configYamlSupport support.ConfigYamlSupport
+					err := initializeConfigYamlSupport(&configYamlSupport, ctx.String("config"))
+					if err != nil {
+						support.Helper.PrintErrName("Error initializing config yaml support: "+err.Error(), "ERR-30350906201")
+						return err
 					}
+					supportSupport.Register(&configYamlSupport)
 
 					eventBusSupport := support.EventBusConstruct()
 					supportSupport.Register(eventBusSupport)
@@ -305,7 +314,7 @@ func initCli() bool {
 					// Initialize broker connection support
 					// This will init the broker connection support
 					// and register the connection to the broker connection support
-					brokerConnectionSupport := initBrokerConnections(configYamlSupport)
+					brokerConnectionSupport := initBrokerConnections(&configYamlSupport)
 					supportSupport.Register(brokerConnectionSupport)
 
 					// Check the own event have regsiter to job manager event
@@ -380,21 +389,26 @@ func initCli() bool {
 					flag = "child_execs_process"
 					supportSupport := support.SupportConstruct("Exec")
 					// Initialize without request to server
-					configYamlSupport, err := support.ConfigYamlSupportContruct(support.ConfigYamlSupportConstructPropsType{
-						RequestToServer: false,
-						Config_path:     ctx.String("config"),
-					})
+					var configYamlSupport support.ConfigYamlSupport
+					err := initializeConfigYamlSupport(&configYamlSupport, ctx.String("config"))
 					if err != nil {
-						support.Helper.PrintErrName("Error initializing config yaml support: "+err.Error(), "ERR-30350903702")
+						support.Helper.PrintErrName("Error initializing config yaml support: "+err.Error(), "ERR-3035090233202")
 						return err
 					}
+					// configYamlSupport, err := support.ConfigYamlSupportContruct(support.ConfigYamlSupportConstructPropsType{
+					// 	Config_path: ctx.String("config"),
+					// })
+					// if err != nil {
+					// 	support.Helper.PrintErrName("Error initializing config yaml support: "+err.Error(), "ERR-30350903702")
+					// 	return err
+					// }
 
-					supportSupport.Register(configYamlSupport)
+					supportSupport.Register(&configYamlSupport)
 
 					// Initialize broker connection support
 					// This will init the broker connection support
 					// and register the connection to the broker connection support
-					brokerConnectionSupport := initBrokerConnections(configYamlSupport)
+					brokerConnectionSupport := initBrokerConnections(&configYamlSupport)
 					supportSupport.Register(brokerConnectionSupport)
 
 					var cmdExecArr []*exec.Cmd
