@@ -28,7 +28,7 @@ func (d *JobData_Data) Scan(value interface{}) error {
 }
 
 type JobData struct {
-	Id          int64                   `json:"id"`
+	Id          string                  `json:"id"`
 	Uuid        string                  `json:"uuid"`
 	Event       string                  `json:"event"`
 	Name        string                  `json:"name"`

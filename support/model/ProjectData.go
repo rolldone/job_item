@@ -5,7 +5,7 @@ import (
 )
 
 type ProjectData struct {
-	Id         int64                  `json:"id"`
+	Id         string                 `json:"id"`
 	Uuid       string                 `json:"uuid"`
 	Name       string                 `json:"name"`
 	Passkey    string                 `json:"passkey,omitempty"`
@@ -19,7 +19,7 @@ type ProjectData struct {
 }
 
 type ProjectDataView struct {
-	Id         int64      `json:"id"`
+	Id         string     `json:"id"`
 	Uuid       string     `json:"uuid"`
 	Key        *string    `json:"key,omitempty"`
 	Name       string     `json:"name"`
