@@ -230,6 +230,10 @@ func initMain(configYamlSupport *support.ConfigYamlSupport, config string) error
 	}
 	supportSupport.Register(configYamlSupport)
 
+	// Initialize event bus support
+	eventBusSupport := support.EventBusConstruct()
+	supportSupport.Register(eventBusSupport)
+
 	// Initialize broker connection support
 	// This will init the broker connection support
 	// and register the connection to the broker connection support
@@ -397,6 +401,10 @@ func initCli() bool {
 					}
 
 					supportSupport.Register(&configYamlSupport)
+
+					// Initialize event bus support
+					eventBusSupport := support.EventBusConstruct()
+					supportSupport.Register(eventBusSupport)
 
 					// Initialize broker connection support
 					// This will init the broker connection support
