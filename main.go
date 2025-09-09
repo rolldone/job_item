@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
+	"encoding/json"
 	"fmt"
 	jobitem "job_item/src/controller/JobItem"
 	jobmanager "job_item/src/controller/JobManager"
@@ -8,10 +11,12 @@ import (
 	"job_item/src/helper"
 	"job_item/support"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -283,6 +288,77 @@ func initCli() bool {
 		// This is with nested command
 		// Example job_item child_process --config=/var/www/html/config.yaml
 		Commands: []*cli.Command{
+			{
+				Flags: flagConfig,
+				Name:  "save",
+				// Aliases: []string{"c"},
+				Usage: "for save the stdout and send to notif",
+				Action: func(ctx *cli.Context) error {
+					// Read from stdin (piped input)
+					scanner := bufio.NewScanner(os.Stdin)
+					var output strings.Builder
+
+					// fmt.Println("Reading piped input...")
+					for scanner.Scan() {
+						line := scanner.Text()
+						fmt.Println(line) // Print to stdout as well
+						output.WriteString(line + "\n")
+					}
+
+					if err := scanner.Err(); err != nil {
+						fmt.Printf("Error reading stdin: %v\n", err)
+						return err
+					}
+
+					capturedOutput := output.String()
+					// fmt.Printf("\n--- Captured %d bytes ---\n", len(capturedOutput))
+
+					// Get task ID from environment variable
+					taskId := os.Getenv("JOB_ITEM_TASK_ID")
+					if taskId == "" {
+						fmt.Printf("Error: JOB_ITEM_TASK_ID environment variable is not set\n")
+						fmt.Printf("Please set JOB_ITEM_TASK_ID (e.g., export JOB_ITEM_TASK_ID=your-task-id)\n")
+						return fmt.Errorf("JOB_ITEM_TASK_ID environment variable is required")
+					}
+
+					// Get notification URL from environment variable
+					baseNotifURL := os.Getenv("JOB_ITEM_MSG_NOTIF_HOST")
+					if baseNotifURL == "" {
+						fmt.Printf("Error: JOB_ITEM_MSG_NOTIF_HOST environment variable is not set\n")
+						fmt.Printf("Please set JOB_ITEM_MSG_NOTIF_HOST (e.g., export JOB_ITEM_MSG_NOTIF_HOST=http://localhost:8080/msg/notif)\n")
+						return fmt.Errorf("JOB_ITEM_MSG_NOTIF_HOST environment variable is required")
+					}
+
+					// Build notification URL with task ID
+					notifURL := fmt.Sprintf("%s/%s", strings.TrimSuffix(baseNotifURL, "/"), "")
+					notifPayload := map[string]string{
+						"msg": capturedOutput,
+					}
+
+					jsonData, err := json.Marshal(notifPayload)
+					if err != nil {
+						fmt.Printf("Error marshaling notification: %v\n", err)
+						return err
+					}
+
+					fmt.Printf("Sending notification to: %s\n", notifURL)
+					resp, err := http.Post(notifURL, "application/json", bytes.NewBuffer(jsonData))
+					if err != nil {
+						fmt.Printf("Error sending notification: %v\n", err)
+						return err
+					}
+					defer resp.Body.Close()
+
+					if resp.StatusCode == http.StatusOK {
+						fmt.Printf("✓ Notification sent successfully (Task ID: %s)\n", taskId)
+					} else {
+						fmt.Printf("✗ Notification failed with status: %d\n", resp.StatusCode)
+					}
+
+					flag = "save"
+					return nil
+				},
+			},
 			{
 				Flags: flagConfig,
 				Name:  "child_process",

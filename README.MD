@@ -37,6 +37,7 @@ Job Item Worker is a lightweight, configurable worker service designed to:
 - **Template-based Commands**: Dynamic command generation using Mustache templates
 - **Process Management**: Graceful startup, shutdown, and restart capabilities
 - **Configuration Hot-reload**: Automatic restart on configuration changes
+- **Pipeline Integration**: Save command to capture and forward command output as notifications
 
 ### Monitoring & Reporting
 - **Hardware Information**: CPU, memory, disk, and network monitoring
@@ -171,6 +172,65 @@ CONFIG_PATH=/path/to/config.yaml ./job_item
 
 # Exec process (background tasks)
 ./job_item child_execs_process --config=config.yaml
+
+# Save command (capture piped input and send as notification)
+./job_item save
+```
+
+### Save Command
+
+The `save` command allows you to capture output from other commands and send it as notifications to the Job Manager. This is useful for logging command outputs, monitoring scripts, or integrating with existing shell workflows.
+
+#### Usage
+```bash
+# Capture ping output and send as notification
+ping google.com -c 5 | ./job_item save
+
+# Capture log file content
+tail -n 100 /var/log/app.log | ./job_item save
+
+# Capture command output with error handling
+ls -la /some/directory 2>&1 | ./job_item save
+
+# Capture script output
+./monitoring_script.sh | ./job_item save
+```
+
+#### Required Environment Variables
+The `save` command requires two environment variables to be set:
+
+- **`JOB_ITEM_TASK_ID`**: Unique identifier for the task (used in the notification URL)
+- **`JOB_ITEM_MSG_NOTIF_HOST`**: Base URL for the notification endpoint
+
+```bash
+# Example setup
+export JOB_ITEM_TASK_ID=monitoring-task-001
+export JOB_ITEM_MSG_NOTIF_HOST=http://localhost:8080/msg/notif
+
+# Now use the save command
+df -h | ./job_item save
+```
+
+#### Behavior
+1. **Reads from stdin**: Captures all piped input line by line
+2. **Real-time display**: Shows captured content on stdout as it's received
+3. **Notification**: Sends the complete captured output to the notification endpoint
+4. **Error handling**: Provides clear error messages if environment variables are missing
+
+#### Example Integration
+```bash
+#!/bin/bash
+# monitoring_script.sh
+
+# Set up environment for notifications
+export JOB_ITEM_TASK_ID="system-monitoring-$(date +%Y%m%d-%H%M%S)"
+export JOB_ITEM_MSG_NOTIF_HOST="http://job-manager:8080/msg/notif"
+
+# Monitor system resources and send notifications
+echo "=== System Monitor Report ===" | ./job_item save
+uptime | ./job_item save
+free -h | ./job_item save
+df -h | ./job_item save
 ```
 
 ### REST API Endpoints
@@ -236,6 +296,8 @@ When a job is executed, the worker automatically provides several environment va
 | `JOB_ITEM_PROJECT_ID` | Project ID for authentication | `7bd0c868-87a0-4c90-8d27-559677763bb6` |
 | `JOB_ITEM_PROJECT_KEY` | Secret key for authentication | `your-secret-key` |
 | `JOB_ITEM_MSG_NOTIF_HOST` | Endpoint for sending progress notifications | `http://worker:8080/msg/notif/abc123-task-id` |
+
+**Note**: The `JOB_ITEM_TASK_ID` and `JOB_ITEM_MSG_NOTIF_HOST` variables are also used by the `save` command to send captured output as notifications.
 
 #### Using Environment Variables in Job Scripts
 
