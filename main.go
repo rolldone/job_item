@@ -645,11 +645,44 @@ func uploadFile(filePath, uploadURL, projectKey string) error {
 	}
 	defer resp.Body.Close()
 
+	// Read response body
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("error reading response body: %v", err)
+	}
+
 	// Check response status
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("upload failed with status %d: %s", resp.StatusCode, string(body))
 	}
+
+	// Parse JSON response
+	var response struct {
+		Status     string `json:"status"`
+		StatusCode int    `json:"status_code"`
+		Return     struct {
+			FileInfo struct {
+				ID            int    `json:"id"`
+				JobRecordUUID string `json:"job_record_uuid"`
+				FileName      string `json:"file_name"`
+			} `json:"file_info"`
+			DownloadURL    string `json:"download_url"`
+			SecurityNotice string `json:"security_notice"`
+			ExpiryNotice   string `json:"expiry_notice"`
+		} `json:"return"`
+	}
+
+	err = json.Unmarshal(body, &response)
+	if err != nil {
+		return fmt.Errorf("error parsing response JSON: %v", err)
+	}
+
+	// Display the important information
+	fmt.Printf("\n--- Upload Response ---\n")
+	fmt.Printf("Download URL: %s\n", response.Return.DownloadURL)
+	fmt.Printf("Security Notice: %s\n", response.Return.SecurityNotice)
+	fmt.Printf("Expiry Notice: %s\n", response.Return.ExpiryNotice)
+	fmt.Printf("----------------------\n")
 
 	return nil
 }
