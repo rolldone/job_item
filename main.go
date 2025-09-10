@@ -5,16 +5,19 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	jobitem "job_item/src/controller/JobItem"
 	jobmanager "job_item/src/controller/JobManager"
 	"job_item/src/event"
 	"job_item/src/helper"
 	"job_item/support"
 	"log"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -290,6 +293,60 @@ func initCli() bool {
 		Commands: []*cli.Command{
 			{
 				Flags: flagConfig,
+				Name:  "upload",
+				Usage: "for upload the file to job manager server",
+				Action: func(ctx *cli.Context) error {
+					// Check if JOB_MANAGER_UPLOAD_FILE environment variable is set
+					uploadURL := os.Getenv("JOB_MANAGER_UPLOAD_FILE")
+					if uploadURL == "" {
+						fmt.Printf("Error: JOB_MANAGER_UPLOAD_FILE environment variable is not set\n")
+						fmt.Printf("Please set JOB_MANAGER_UPLOAD_FILE (e.g., export JOB_MANAGER_UPLOAD_FILE=http://job-manager:5280/api/worker/job_record/file/task-id)\n")
+						return fmt.Errorf("JOB_MANAGER_UPLOAD_FILE environment variable is required")
+					}
+
+					// Check if JOB_ITEM_PROJECT_KEY environment variable is set for authentication
+					projectKey := os.Getenv("JOB_ITEM_PROJECT_KEY")
+					if projectKey == "" {
+						fmt.Printf("Error: JOB_ITEM_PROJECT_KEY environment variable is not set\n")
+						fmt.Printf("Please set JOB_ITEM_PROJECT_KEY (e.g., export JOB_ITEM_PROJECT_KEY=your-secret-key)\n")
+						return fmt.Errorf("JOB_ITEM_PROJECT_KEY environment variable is required")
+					}
+
+					// Get file path from command line arguments
+					args := ctx.Args().Slice()
+					if len(args) == 0 {
+						fmt.Printf("Error: No file path provided\n")
+						fmt.Printf("Usage: ./job_item upload <file_path>\n")
+						fmt.Printf("Example: ./job_item upload /path/to/your/file.pdf\n")
+						return fmt.Errorf("file path is required")
+					}
+
+					filePath := args[0]
+
+					// Check if file exists
+					if _, err := os.Stat(filePath); os.IsNotExist(err) {
+						fmt.Printf("Error: File does not exist: %s\n", filePath)
+						return fmt.Errorf("file not found: %s", filePath)
+					}
+
+					// Upload the file
+					fmt.Printf("Uploading file: %s\n", filePath)
+					fmt.Printf("Upload URL: %s\n", uploadURL)
+
+					err := uploadFile(filePath, uploadURL, projectKey)
+					if err != nil {
+						fmt.Printf("✗ Upload failed: %v\n", err)
+						return err
+					}
+
+					fmt.Printf("✓ File uploaded successfully: %s\n", filepath.Base(filePath))
+
+					flag = "upload"
+					return nil
+				},
+			},
+			{
+				Flags: flagConfig,
 				Name:  "save",
 				// Aliases: []string{"c"},
 				Usage: "for save the stdout and send to notif",
@@ -534,6 +591,66 @@ func saveWithoutChange(filePath string) error {
 	}
 
 	fmt.Printf("Successfully saved %s without changes\n", filePath)
+	return nil
+}
+
+func uploadFile(filePath, uploadURL, projectKey string) error {
+	// Open the file
+	file, err := os.Open(filePath)
+	if err != nil {
+		return fmt.Errorf("error opening file: %v", err)
+	}
+	defer file.Close()
+
+	// Create a buffer to write our multipart form data
+	var buffer bytes.Buffer
+	writer := multipart.NewWriter(&buffer)
+
+	// Create a form file field
+	formFile, err := writer.CreateFormFile("file", filepath.Base(filePath))
+	if err != nil {
+		return fmt.Errorf("error creating form file: %v", err)
+	}
+
+	// Copy the file content to the form file field
+	_, err = io.Copy(formFile, file)
+	if err != nil {
+		return fmt.Errorf("error copying file content: %v", err)
+	}
+
+	// Close the multipart writer to finalize the form data
+	err = writer.Close()
+	if err != nil {
+		return fmt.Errorf("error closing writer: %v", err)
+	}
+
+	// Create the HTTP request
+	req, err := http.NewRequest("POST", uploadURL, &buffer)
+	if err != nil {
+		return fmt.Errorf("error creating request: %v", err)
+	}
+
+	// Set headers
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer "+projectKey)
+
+	// Execute the request
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("error uploading file: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Check response status
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("upload failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
 	return nil
 }
 
