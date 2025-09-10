@@ -363,8 +363,10 @@ func initCli() bool {
 					}
 
 					if err := scanner.Err(); err != nil {
-						fmt.Printf("Error reading stdin: %v\n", err)
-						return err
+						errorMsg := fmt.Sprintf("Error reading stdin: %v\n", err)
+						fmt.Print(errorMsg)
+						output.WriteString(errorMsg) // Record the error in output too
+						// Don't return here, continue to send the notification with whatever we captured
 					}
 
 					capturedOutput := output.String()
