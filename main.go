@@ -349,7 +349,7 @@ func initCli() bool {
 				Flags: flagConfig,
 				Name:  "save",
 				// Aliases: []string{"c"},
-				Usage: "for save the stdout and send to notif",
+				Usage: "for save stdout/stderr and send to notif (use: command 2>&1 | ./job_item . save)",
 				Action: func(ctx *cli.Context) error {
 					// Read from stdin (piped input)
 					scanner := bufio.NewScanner(os.Stdin)
@@ -370,7 +370,12 @@ func initCli() bool {
 					}
 
 					capturedOutput := output.String()
-					// fmt.Printf("\n--- Captured %d bytes ---\n", len(capturedOutput))
+					// fmt.Println("Osget env ERROR_MESSAGE_STDERR", os.Getenv("ERROR_MESSAGE_STDERR"))
+
+					sDatas, _ := helper.ShareDataGet(os.Getenv("JOB_ITEM_TASK_ID"), "ERROR_MESSAGE_STDERR")
+					if len(sDatas) > 0 {
+						capturedOutput += strings.Join(sDatas, "")
+					}
 
 					// Get task ID from environment variable
 					taskId := os.Getenv("JOB_ITEM_TASK_ID")
@@ -389,7 +394,7 @@ func initCli() bool {
 					}
 
 					// Build notification URL with task ID
-					notifURL := fmt.Sprintf("%s/%s", strings.TrimSuffix(baseNotifURL, "/"), "")
+					notifURL := baseNotifURL
 					notifPayload := map[string]string{
 						"msg": capturedOutput,
 					}
@@ -693,6 +698,11 @@ func ginInitialize(router *gin.Engine) {
 	msgNotifController := jobmanager.NewMsgNotifController()
 	router.POST("/msg/notif/:task_id", msgNotifController.AddNotif)
 
+	// Share data controller (temporary, in-memory)
+	shareDataController := jobmanager.NewShareDataController()
+	router.POST("/msg/share/data/:task_id", shareDataController.AddShareData)
+	router.GET("/msg/share/data/:task_id/:key", shareDataController.GetShareData)
+
 	// This is for local app Communication
 	jobGroup := router.Group("/job")
 	{
@@ -703,7 +713,35 @@ func ginInitialize(router *gin.Engine) {
 func initBrokerConnections(configYamlSupport *support.ConfigYamlSupport) *support.BrokerConnectionSupport {
 	brokerConnectionSupport := support.BrokerConnectionSupportContruct()
 	currentConnection := configYamlSupport.ConfigData.Broker_connection
-	switch currentConnection["type"].(string) {
+
+	// Check if broker connection is properly configured
+	if currentConnection == nil {
+		fmt.Println("\n❌ Configuration Error:")
+		fmt.Println("Broker connection configuration is missing")
+		fmt.Println("Please configure an active broker connection in the Job Manager")
+		fmt.Println("Available broker types: nats, rabbitmq, redis")
+		os.Exit(1)
+	}
+
+	// Check if broker type is specified
+	brokerType, ok := currentConnection["type"]
+	if !ok || brokerType == nil {
+		fmt.Println("\n❌ Configuration Error:")
+		fmt.Println("Broker connection type is not specified")
+		fmt.Println("Please configure the broker type (nats, rabbitmq, or redis) in the Job Manager")
+		os.Exit(1)
+	}
+
+	// Check if broker key is specified
+	brokerKey, ok := currentConnection["key"]
+	if !ok || brokerKey == nil {
+		fmt.Println("\n❌ Configuration Error:")
+		fmt.Println("Broker connection key is not specified")
+		fmt.Println("Please configure the broker connection key in the Job Manager")
+		os.Exit(1)
+	}
+
+	switch brokerType.(string) {
 	case "nats":
 		natsBrokerCon := configYamlSupport.GetNatsBrokerCon(configYamlSupport.GetTypeBrokerCon(currentConnection))
 		tryRestartProcess(5, func() bool {
@@ -712,7 +750,7 @@ func initBrokerConnections(configYamlSupport *support.ConfigYamlSupport) *suppor
 				return true
 			}
 			var gg *support.NatsSupport = &natSupport
-			brokerConnectionSupport.RegisterConnection(currentConnection["key"].(string), gg)
+			brokerConnectionSupport.RegisterConnection(brokerKey.(string), gg)
 			return false
 		})
 	case "rabbitmq":
@@ -723,7 +761,7 @@ func initBrokerConnections(configYamlSupport *support.ConfigYamlSupport) *suppor
 				return true
 			}
 			var gg *support.AMQPSupport = amqpSupport
-			brokerConnectionSupport.RegisterConnection(currentConnection["key"].(string), gg)
+			brokerConnectionSupport.RegisterConnection(brokerKey.(string), gg)
 			return false
 		})
 	case "redis":
@@ -734,9 +772,15 @@ func initBrokerConnections(configYamlSupport *support.ConfigYamlSupport) *suppor
 				return true
 			}
 			var gg *support.RedisSupport = redisSupport
-			brokerConnectionSupport.RegisterConnection(currentConnection["key"].(string), gg)
+			brokerConnectionSupport.RegisterConnection(brokerKey.(string), gg)
 			return false
 		})
+	default:
+		fmt.Println("\n❌ Configuration Error:")
+		fmt.Printf("Unsupported broker type: %v\n", brokerType)
+		fmt.Println("Supported broker types: nats, rabbitmq, redis")
+		fmt.Println("Please select a valid broker connection in the Job Manager")
+		os.Exit(1)
 	}
 	return brokerConnectionSupport
 }

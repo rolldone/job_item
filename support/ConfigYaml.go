@@ -233,11 +233,25 @@ func (c *ConfigYamlSupport) GetEnv() []string {
 		c.printGroupName("Error marshalling ConfigData to JSON: " + err.Error())
 		panic(1)
 	}
+
+	// Prepare share-data env values for child process
+	shareBase := os.Getenv("JOB_ITEM_SHARE_DATA_BASE")
+	if shareBase == "" {
+		shareBase = "/msg/share/data"
+	}
+	// normalize baseURL
+	if baseURL != "" {
+		baseURL = strings.TrimRight(baseURL, "/")
+	}
+	shareHost := baseURL + shareBase
+
 	return []string{
 		// For child and child exec processes
 		"JOB_ITEM_IDENTITY_ID=" + c.ConfigData.Identity_id,
 		"JOB_ITEM_BASE_URL=" + baseURL,
 		"JOB_ITEM_CONFIG_DATA=" + string(configData),
+		// Specific endpoints for child process to add/get share data
+		"JOB_ITEM_SHARE_DATA_HOST=" + shareHost,
 	}
 }
 
