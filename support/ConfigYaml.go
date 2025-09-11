@@ -245,6 +245,9 @@ func (c *ConfigYamlSupport) GetEnv() []string {
 	}
 	shareHost := baseURL + shareBase
 
+	jobItemShareDataAdd := shareHost + "/:task_id"
+	jobItemShareDataGet := shareHost + "/:task_id/:key"
+
 	return []string{
 		// For child and child exec processes
 		"JOB_ITEM_IDENTITY_ID=" + c.ConfigData.Identity_id,
@@ -252,6 +255,8 @@ func (c *ConfigYamlSupport) GetEnv() []string {
 		"JOB_ITEM_CONFIG_DATA=" + string(configData),
 		// Specific endpoints for child process to add/get share data
 		"JOB_ITEM_SHARE_DATA_HOST=" + shareHost,
+		"JOB_ITEM_SHARE_DATA_ADD=" + jobItemShareDataAdd,
+		"JOB_ITEM_SHARE_DATA_GET=" + jobItemShareDataGet,
 	}
 }
 

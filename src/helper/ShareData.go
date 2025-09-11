@@ -45,17 +45,13 @@ func ShareDataAdd(taskID, key, data string, ttlSeconds int) {
 	// If JOB_ITEM_SHARE_DATA_ADD is configured, forward the add to that endpoint.
 	addURL := os.Getenv("JOB_ITEM_SHARE_DATA_ADD")
 	if addURL != "" {
-		// // support :task_id placeholder or append taskID to path
-		// if strings.Contains(addURL, ":task_id") {
-		// 	addURL = strings.ReplaceAll(addURL, ":task_id", taskID)
-		// } else {
-		// 	if strings.HasSuffix(addURL, "/") {
-		// 		addURL = addURL + taskID
-		// 	} else {
-		// 		addURL = addURL + "/" + taskID
-		// 	}
-		// }
-
+		// Replace placeholders in URL
+		if strings.Contains(addURL, ":task_id") {
+			addURL = strings.ReplaceAll(addURL, ":task_id", taskID)
+		}
+		if strings.Contains(addURL, ":key") {
+			addURL = strings.ReplaceAll(addURL, ":key", key)
+		}
 		// build payload
 		payload := map[string]interface{}{
 			"key":  key,
@@ -148,19 +144,18 @@ func ShareDataGet(taskID, key string) ([]string, error) {
 
 	// Fallback to remote GET endpoint
 	getURL := os.Getenv("JOB_ITEM_SHARE_DATA_GET")
-	if getURL == "" {
-		return nil, fmt.Errorf("not found")
+
+	if strings.Contains(getURL, ":task_id") {
+		getURL = strings.ReplaceAll(getURL, ":task_id", taskID)
 	}
-	// replace placeholder or append key
+
 	if strings.Contains(getURL, ":key") {
 		getURL = strings.ReplaceAll(getURL, ":key", key)
-	} else {
-		if strings.HasSuffix(getURL, "/") {
-			getURL = getURL + key
-		} else {
-			getURL = getURL + "/" + key
-		}
 	}
+
+	// For debugging
+	// fmt.Printf("ShareDataGet: remote getURL=%s\n", getURL)
+	// fmt.Println("ShareDataGet called with taskID:", taskID, "key:", key)
 
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(getURL)

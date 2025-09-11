@@ -219,27 +219,6 @@ func (c *JobManagerEventItem) RunGoroutine(command string, task_id string) {
 		cmd = exec.Command("bash", "-c", command)
 	}
 
-	// jobManagerEventResultURL := helper.ReplaceKeysInURL(os.Getenv("JOB_MANAGER_RESULT_URL"), []map[string]string{
-	// 	{":task_id": task_id},
-	// })
-	// jobManagerUploadFile := helper.ReplaceKeysInURL(os.Getenv("JOB_MANAGER_UPLOAD_FILE"), []map[string]string{
-	// 	{":task_id": task_id},
-	// })
-	// jobManagerMsgNotifHost := helper.ReplaceKeysInURL(os.Getenv("JOB_ITEM_MSG_NOTIF_HOST"), []map[string]string{
-	// 	{":task_id": task_id},
-	// })
-
-	// We need replace the :task_id on the JOB_ITEM_SHARE_DATA_ADD and JOB_ITEM_SHARE_DATA_GET
-	if os.Getenv("JOB_ITEM_SHARE_DATA_ADD") == "" {
-		jobItemShareDataAdd := os.Getenv("JOB_ITEM_SHARE_DATA_HOST")
-		jobItemShareDataAdd = jobItemShareDataAdd + "/" + task_id
-		os.Setenv("JOB_ITEM_SHARE_DATA_ADD", jobItemShareDataAdd)
-
-		jobItemShareDataGet := os.Getenv("JOB_ITEM_SHARE_DATA_HOST")
-		jobItemShareDataGet = jobItemShareDataGet + "/" + task_id + "/:key"
-		os.Setenv("JOB_ITEM_SHARE_DATA_GET", jobItemShareDataGet)
-	}
-
 	envInvolve := append(os.Environ(),
 		// For child processes
 		// You need replace :task_id with the actual task ID on the child process

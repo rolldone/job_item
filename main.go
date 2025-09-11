@@ -716,10 +716,8 @@ func initBrokerConnections(configYamlSupport *support.ConfigYamlSupport) *suppor
 
 	// Check if broker connection is properly configured
 	if currentConnection == nil {
-		fmt.Println("\n❌ Configuration Error:")
-		fmt.Println("Broker connection configuration is missing")
-		fmt.Println("Please configure an active broker connection in the Job Manager")
-		fmt.Println("Available broker types: nats, rabbitmq, redis")
+		fmt.Println("\n❌ Connection Refuse :")
+		fmt.Println("Please check the job manager server connection")
 		os.Exit(1)
 	}
 
