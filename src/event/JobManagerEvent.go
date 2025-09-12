@@ -277,21 +277,34 @@ func (c *JobManagerEventItem) WatchProcessCMD(cmd *exec.Cmd, task_id string) {
 		DefaultTTLSeconds: 36000000,
 	})
 	go func(conn support.BrokerConnectionInterface) {
+		isMatchErr := false
+		errString := ""
 		for {
 			n2, err2 := stderr.Read(out)
+
 			if err2 != nil {
 				fmt.Println("stderr err :: ", err)
 				break
 			}
 
-			// Add to share data with key ERROR_MESSAGE_STDERR
-			helper.ShareDataAdd(task_id, "ERROR_MESSAGE_STDERR", string(out[:n2]), 0)
-
 			fmt.Println("stderr :: ", string(out[:n2]))
+
 			if support.Helper.ConfigYaml.ConfigData.End_point != "" {
-				conn.Pub(task_id+"_failed", string(out[:n2]))
+				// Add to share data with key ERROR_MESSAGE_STDERR
+				if !isMatchErr {
+					isMatchErr = true
+					errString = string(out[:n2])
+				}
+				if errString == string(out[:n2]) {
+					go func() {
+						helper.ShareDataAdd(task_id, "ERROR_MESSAGE_STDERR", errString, 0)
+						time.Sleep(1 * time.Second)
+						conn.Pub(task_id+"_failed", errString)
+					}()
+				}
 				// Write env ERROR_MESSAGE_STDERR
 			}
+
 			c.Last_status = GetStatus().STATUS_ERROR
 		}
 	}(c.conn)
