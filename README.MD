@@ -175,6 +175,9 @@ CONFIG_PATH=/path/to/config.yaml ./job_item
 
 # Save command (capture piped input and send as notification)
 ./job_item save
+
+# Upload command (upload a local file to Job Manager)
+./job_item upload <file_path>
 ```
 
 ### Save Command
@@ -195,6 +198,54 @@ ls -la /some/directory 2>&1 | ./job_item save
 # Capture script output
 ./monitoring_script.sh | ./job_item save
 ```
+
+Note on capturing stderr
+
+It's recommended to use `2>&1` to make sure stderr is also captured and sent to the notification service. Example (recommended):
+
+```bash
+your_cmd 2>&1 | ./job_item save
+```
+
+That said, `job_item save` often records error output even without `2>&1` because some tools write errors to stdout or the surrounding runner may redirect stderr. Using `2>&1` simply guarantees stderr will be included in the saved notification.
+
+
+### Upload Command
+
+The `upload` subcommand uploads a single file to the Job Manager's file upload endpoint. It is useful for sending artifacts (reports, logs, etc.) produced locally to the Job Manager associated with a task.
+
+Usage:
+
+```bash
+# Upload local file to the Job Manager
+./job_item upload /path/to/your/file.pdf
+```
+
+Required Environment Variables for `upload`:
+
+- `JOB_MANAGER_UPLOAD_FILE`: Full upload URL provided by Job Manager (e.g. `http://job-manager:5280/api/worker/job_record/file/<task-id>`)
+- `JOB_ITEM_PROJECT_KEY`: Authorization key used as Bearer token for the upload endpoint
+
+Behavior:
+
+1. The command reads the first positional argument as the path to the file to upload.
+2. It validates that the file exists locally; otherwise it exits with an error.
+3. It sends a multipart/form-data POST request with the file under the form field `file`.
+4. It sets `Authorization: Bearer <JOB_ITEM_PROJECT_KEY>` header for authentication.
+5. On success it prints a short upload summary (download URL and notices).
+
+Example:
+
+```bash
+export JOB_MANAGER_UPLOAD_FILE="http://job-manager:5280/api/worker/job_record/file/abc123-task-id"
+export JOB_ITEM_PROJECT_KEY="your-secret-key"
+./job_item upload ./reports/validation_report.pdf
+```
+
+Notes:
+
+- If `JOB_MANAGER_UPLOAD_FILE` or `JOB_ITEM_PROJECT_KEY` are not set, the command exits with an error and prints instructions to set the variables.
+- On upload failure the command prints the response body to help debugging and returns non-zero exit code.
 
 #### Required Environment Variables
 The `save` command requires two environment variables to be set:
