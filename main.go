@@ -362,12 +362,12 @@ func initCli() bool {
 						output.WriteString(line + "\n")
 					}
 
-					if err := scanner.Err(); err != nil {
-						errorMsg := fmt.Sprintf("Error reading stdin: %v\n", err)
-						fmt.Print(errorMsg)
-						output.WriteString(errorMsg) // Record the error in output too
-						// Don't return here, continue to send the notification with whatever we captured
-					}
+					// if err := scanner.Err(); err != nil {
+					// 	errorMsg := fmt.Sprintf("Error reading stdin: %v\n", err)
+					// 	fmt.Print(errorMsg)
+					// 	output.WriteString(errorMsg) // Record the error in output too
+					// 	// Don't return here, continue to send the notification with whatever we captured
+					// }
 
 					capturedOutput := output.String()
 					// fmt.Println("Osget env ERROR_MESSAGE_STDERR", os.Getenv("ERROR_MESSAGE_STDERR"))
@@ -609,42 +609,85 @@ func uploadFile(filePath, uploadURL, projectKey string) error {
 	}
 	defer file.Close()
 
-	// Create a buffer to write our multipart form data
-	var buffer bytes.Buffer
-	writer := multipart.NewWriter(&buffer)
+	// Stream upload using io.Pipe to avoid buffering entire request in memory
+	pr, pw := io.Pipe()
+	writer := multipart.NewWriter(pw)
 
-	// Create a form file field
-	formFile, err := writer.CreateFormFile("file", filepath.Base(filePath))
-	if err != nil {
-		return fmt.Errorf("error creating form file: %v", err)
-	}
-
-	// Copy the file content to the form file field
-	_, err = io.Copy(formFile, file)
-	if err != nil {
-		return fmt.Errorf("error copying file content: %v", err)
-	}
-
-	// Close the multipart writer to finalize the form data
-	err = writer.Close()
-	if err != nil {
-		return fmt.Errorf("error closing writer: %v", err)
-	}
-
-	// Create the HTTP request
-	req, err := http.NewRequest("POST", uploadURL, &buffer)
+	// Create the HTTP request with the pipe reader as body
+	req, err := http.NewRequest("POST", uploadURL, pr)
 	if err != nil {
 		return fmt.Errorf("error creating request: %v", err)
 	}
-
-	// Set headers
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.Header.Set("Authorization", "Bearer "+projectKey)
 
-	// Execute the request
-	client := &http.Client{
-		Timeout: 30 * time.Second,
+	// Configure client timeout (env JOB_ITEM_UPLOAD_TIMEOUT_SECONDS, default 300 seconds)
+	// Default 300s (5 minutes) to handle large uploads; set to 0 to disable timeout.
+	uploadTimeoutSec := 300
+	if v := os.Getenv("JOB_ITEM_UPLOAD_TIMEOUT_SECONDS"); v != "" {
+		if vi, err := strconv.Atoi(v); err == nil {
+			uploadTimeoutSec = vi
+		}
 	}
+	client := &http.Client{}
+	if uploadTimeoutSec > 0 {
+		client.Timeout = time.Duration(uploadTimeoutSec) * time.Second
+	}
+
+	// Start goroutine to write multipart data into the pipe
+	go func() {
+		defer pw.Close()
+		defer writer.Close()
+
+		part, err := writer.CreateFormFile("file", filepath.Base(filePath))
+		if err != nil {
+			pw.CloseWithError(err)
+			return
+		}
+
+		// reset file read position
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			pw.CloseWithError(err)
+			return
+		}
+
+		fileInfo, err := file.Stat()
+		if err != nil {
+			pw.CloseWithError(err)
+			return
+		}
+		totalSize := fileInfo.Size()
+
+		buf := make([]byte, 32*1024)
+		var readBytes int64 = 0
+		lastPct := -1
+		for {
+			n, rerr := file.Read(buf)
+			if n > 0 {
+				wn, werr := part.Write(buf[:n])
+				if werr != nil {
+					pw.CloseWithError(werr)
+					return
+				}
+				readBytes += int64(wn)
+				pct := 0
+				if totalSize > 0 {
+					pct = int((readBytes * 100) / totalSize)
+				}
+				if pct != lastPct {
+					lastPct = pct
+					fmt.Printf("PROGRESS: %d%%\n", pct)
+				}
+			}
+			if rerr != nil {
+				if rerr == io.EOF {
+					break
+				}
+				pw.CloseWithError(rerr)
+				return
+			}
+		}
+	}()
 
 	resp, err := client.Do(req)
 	if err != nil {

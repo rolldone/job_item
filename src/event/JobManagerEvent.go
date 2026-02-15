@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"syscall"
 	"time"
 
 	"github.com/hoisie/mustache"
@@ -238,7 +239,9 @@ func (c *JobManagerEventItem) WatchProcessCMD(cmd *exec.Cmd, task_id string) {
 
 	// Create function kill process
 	killProcess := func() {
-		cmd.Process.Kill()
+		if cmd.Process != nil {
+			cmd.Process.Kill()
+		}
 	}
 
 	// Subcribe the kill process action
@@ -276,6 +279,10 @@ func (c *JobManagerEventItem) WatchProcessCMD(cmd *exec.Cmd, task_id string) {
 	helper.ShareDataOption(task_id, helper.ShareDataOptions{
 		DefaultTTLSeconds: 36000000,
 	})
+
+	// no idle-timeout monitor (progress is expected via stdout)
+
+	// stderr reader: collect stderr but do not publish failed until process exit
 	go func(conn support.BrokerConnectionInterface) {
 		isMatchErr := false
 		errString := ""
@@ -283,49 +290,68 @@ func (c *JobManagerEventItem) WatchProcessCMD(cmd *exec.Cmd, task_id string) {
 			n2, err2 := stderr.Read(out)
 
 			if err2 != nil {
-				fmt.Println("stderr err :: ", err)
+				fmt.Println("stderr err :: ", err2)
 				break
 			}
 
-			fmt.Println("stderr :: ", string(out[:n2]))
+			fmt.Println("UPLOAD_ERROR:", string(out[:n2]))
+
+			// activity observed (progress is handled via stdout/stderr)
 
 			if support.Helper.ConfigYaml.ConfigData.End_point != "" {
 				// Add to share data with key ERROR_MESSAGE_STDERR
 				if !isMatchErr {
 					isMatchErr = true
 					errString = string(out[:n2])
+					go helper.ShareDataAdd(task_id, "ERROR_MESSAGE_STDERR", errString, 0)
 				}
-				if errString == string(out[:n2]) {
-					go func() {
-						helper.ShareDataAdd(task_id, "ERROR_MESSAGE_STDERR", errString, 0)
-						time.Sleep(1 * time.Second)
-						conn.Pub(task_id+"_failed", errString)
-					}()
-				}
-				// Write env ERROR_MESSAGE_STDERR
 			}
 
 			c.Last_status = GetStatus().STATUS_ERROR
 		}
 	}(c.conn)
 
+	// stdout reader: publish progress and reset idle timer
 	go func(conn support.BrokerConnectionInterface) {
 		for {
-			// reading the bytes
 			n, err := stdout.Read(out)
 			if err != nil {
 				fmt.Println("stdout err :: ", err)
 				break
 			}
-			fmt.Println("stdout :: ", string(out[:n]))
-			// conn.Pub(task_id+"_process", fmt.Sprint("stdout :: ", string(out[:n])))
+			fmt.Println("UPLOAD_PROGRESS:", string(out[:n]))
+			// activity observed (progress is handled via stdout/stderr)
 			if support.Helper.ConfigYaml.ConfigData.End_point != "" {
 				conn.Pub(task_id+"_process", string(out[:n]))
 			}
 		}
 	}(c.conn)
 
-	cmd.Wait()
+	// Wait for process exit and then decide final status
+	waitErr := cmd.Wait()
+
+	// determine exit code
+	exitCode := 0
+	if waitErr != nil {
+		if exitErr, ok := waitErr.(*exec.ExitError); ok {
+			if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
+				exitCode = status.ExitStatus()
+			} else {
+				exitCode = 1
+			}
+		} else {
+			exitCode = 1
+		}
+	} else {
+		exitCode = 0
+	}
+
+	// publish final status only via RunGoroutine's defer: set Last_status here
+	if exitCode == 0 {
+		c.Last_status = GetStatus().STATUS_FINISH
+	} else {
+		c.Last_status = GetStatus().STATUS_ERROR
+	}
 }
 
 type brokerConStatus struct {

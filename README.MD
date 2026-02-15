@@ -247,6 +247,10 @@ Notes:
 - If `JOB_MANAGER_UPLOAD_FILE` or `JOB_ITEM_PROJECT_KEY` are not set, the command exits with an error and prints instructions to set the variables.
 - On upload failure the command prints the response body to help debugging and returns non-zero exit code.
 
+Timeouts and large files
+
+- `JOB_ITEM_UPLOAD_TIMEOUT_SECONDS`: configure how long the client will wait for the upload to complete (in seconds). Default is `300` (5 minutes). Increase this value for slower networks or very large files, or set to `0` to disable the client-side timeout. Also ensure any proxies (nginx, load balancer) have matching or higher timeouts and that `client_max_body_size` is large enough.
+
 #### Required Environment Variables
 The `save` command requires two environment variables to be set:
 
@@ -347,6 +351,7 @@ When a job is executed, the worker automatically provides several environment va
 | `JOB_ITEM_PROJECT_ID` | Project ID for authentication | `7bd0c868-87a0-4c90-8d27-559677763bb6` |
 | `JOB_ITEM_PROJECT_KEY` | Secret key for authentication | `your-secret-key` |
 | `JOB_ITEM_MSG_NOTIF_HOST` | Endpoint for sending progress notifications | `http://worker:8080/msg/notif/abc123-task-id` |
+| `JOB_ITEM_UPLOAD_TIMEOUT_SECONDS` | HTTP client timeout for uploads (seconds). Default `300` (5 minutes). Set `0` to disable client timeout. | `300` |
 
 **Note**: The `JOB_ITEM_TASK_ID` and `JOB_ITEM_MSG_NOTIF_HOST` variables are also used by the `save` command to send captured output as notifications.
 
