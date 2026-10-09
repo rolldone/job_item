@@ -124,6 +124,8 @@ type ExecConfig struct {
 type ConfigData struct {
 	// Unique Identity ID for the job item
 	Identity_id string `yaml:"identity_id"`
+	// Directory for local process state SQLite store (optional; env JOB_ITEM_DATA_DIR takes precedence).
+	Data_dir string `yaml:"data_dir"`
 	// End point for the job item service
 	End_point string `yaml:"end_point"`
 	// Credential for the job item

@@ -8,8 +8,8 @@ package support
 //     langsung, TANPA GORM, agar job_item tetap ringan.
 //   - WAL + busy_timeout untuk keamanan multi-connection dalam satu proses (single-writer).
 //   - Lokasi default: `<dir config>/.job_item_data/state.db`. Karena ConfigYamlSupport melakukan
-//     os.Chdir ke folder config, "dir config" == working directory proses. Override via env
-//     JOB_ITEM_DATA_DIR (berisi folder), opsional argumen eksplisit pada Init.
+//     os.Chdir ke folder config, "dir config" == working directory proses. Prioritas override:
+//     env JOB_ITEM_DATA_DIR > field YAML `data_dir` > argumen eksplisit pada Init.
 //   - Folder dibuat dengan mode 0700.
 //
 // Waktu disimpan sebagai UTC RFC3339 (kolom TEXT) agar perbandingan leksikografis == kronologis,
@@ -68,21 +68,24 @@ const defaultBusyTimeoutMs = 5000
 var processStateStore *ProcessStateStore
 
 // resolveDataDir menentukan folder data store dengan prioritas:
-//  1. argumen eksplisit dataDirOverride (bila tidak kosong)
-//  2. env JOB_ITEM_DATA_DIR
+//  1. env JOB_ITEM_DATA_DIR (menang atas konfigurasi file)
+//  2. config `data_dir` pada config.yaml (bila di-set)
 //  3. default: <working dir>/.job_item_data
 func resolveDataDir(dataDirOverride string) string {
-	if dataDirOverride != "" {
-		return dataDirOverride
-	}
 	if env := os.Getenv("JOB_ITEM_DATA_DIR"); env != "" {
 		return env
+	}
+	if Helper != nil && Helper.ConfigYaml != nil && Helper.ConfigYaml.ConfigData.Data_dir != "" {
+		return Helper.ConfigYaml.ConfigData.Data_dir
+	}
+	if dataDirOverride != "" {
+		return dataDirOverride
 	}
 	return DefaultDataDirName
 }
 
 // InitProcessStateStore membuka (dan membuat bila perlu) SQLite store di folder data.
-// dataDirOverride opsional; kosong berarti pakai env JOB_ITEM_DATA_DIR atau default.
+// Prioritas folder: env JOB_ITEM_DATA_DIR > config `data_dir` > argumen dataDirOverride > default.
 func InitProcessStateStore(dataDirOverride string) (*ProcessStateStore, error) {
 	dataDir := resolveDataDir(dataDirOverride)
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {

@@ -20,6 +20,27 @@ func newStore(t *testing.T) *ProcessStateStore {
 	return st
 }
 
+func TestProcessStateStore_DataDirPrecedence(t *testing.T) {
+	originalHelper := Helper
+	t.Cleanup(func() { Helper = originalHelper })
+	t.Setenv("JOB_ITEM_DATA_DIR", "")
+	Helper = SupportConstruct("Test")
+	Helper.ConfigYaml = &ConfigYamlSupport{ConfigData: ConfigData{Data_dir: "yaml-data"}}
+
+	if got := resolveDataDir("explicit-data"); got != "yaml-data" {
+		t.Fatalf("config data_dir must override argument: got %q", got)
+	}
+	t.Setenv("JOB_ITEM_DATA_DIR", "env-data")
+	if got := resolveDataDir("explicit-data"); got != "env-data" {
+		t.Fatalf("env must override config and argument: got %q", got)
+	}
+	Helper.ConfigYaml.ConfigData.Data_dir = ""
+	t.Setenv("JOB_ITEM_DATA_DIR", "")
+	if got := resolveDataDir("explicit-data"); got != "explicit-data" {
+		t.Fatalf("explicit argument must be fallback before default: got %q", got)
+	}
+}
+
 func TestProcessStateStore_CRUDLifecycle(t *testing.T) {
 	st := newStore(t)
 

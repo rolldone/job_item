@@ -9,11 +9,13 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/hoisie/mustache"
-	"github.com/shirou/gopsutil/v3/host"
 )
 
 type DataBodyType map[string]interface{}
@@ -52,12 +54,7 @@ func subscribeAndRunJobEvent(conn support.BrokerConnectionInterface, sub_key str
 			f.WriteString(string(dataString))
 			f.Close()
 
-			hostInfo, err := host.Info()
-			if err != nil {
-				log.Fatalln(err)
-				return
-			}
-			conn.Pub(messageObject.Task_id+"_who", hostInfo.HostID)
+			conn.Pub(messageObject.Task_id+"_who", support.Helper.ConfigYaml.ConfigData.Identity_id)
 
 			var cmd string
 			if _, ok := messageObject.Data.([]interface{}); ok {
@@ -77,7 +74,9 @@ func subscribeAndRunJobEvent(conn support.BrokerConnectionInterface, sub_key str
 			jobManEvItem := JobManagerEventItem{
 				conn: c.conn,
 			}
-			go jobManEvItem.RunGoroutine(cmd, messageObject.Task_id)
+			// Task 3 (WO-2026-10-09-001): teruskan nama event untuk kolom `event` di store.
+			eventName := strings.TrimPrefix(sub_key, project_app_uuid+".")
+			go jobManEvItem.RunGoroutine(cmd, messageObject.Task_id, eventName)
 		}(message)
 	})
 	return unsub, err
@@ -93,6 +92,10 @@ type ActionMap struct {
 }
 
 func (c *JobManagerEvent) ListenEvent(conn_name string) {
+	// Task 3: buka store di proses utama child_process (bukan child_execs_process),
+	// jalankan cleanup saat startup, dan pertahankan single-writer per instance.
+	_ = stateStoreInstance()
+
 	// Then get the data connection by connection key
 	var initPubSubChannel = func() {
 		conn := support.Helper.BrokerConnection.GetConnection(conn_name)
@@ -174,9 +177,11 @@ func (c *JobManagerEvent) ListenEvent(conn_name string) {
 type JobManagerEventItem struct {
 	conn        support.BrokerConnectionInterface
 	Last_status string
+	event       string
 }
 
-func (c *JobManagerEventItem) RunGoroutine(command string, task_id string) {
+func (c *JobManagerEventItem) RunGoroutine(command string, task_id string, eventName string) {
+	c.event = eventName
 	project_app_uuid := support.Helper.ConfigYaml.ConfigData.Uuid
 	unsub, err := c.conn.Sub(task_id+"_worker", project_app_uuid, func(message string) {
 		// fmt.Println(sub_key, " :: ", message)
@@ -202,6 +207,13 @@ func (c *JobManagerEventItem) RunGoroutine(command string, task_id string) {
 	})
 	if err != nil {
 		log.Println("RunGoroutine :: err :: 23940239407 :: ", err)
+	}
+
+	// Task 3 (WO-2026-10-09-001): catat state RUNNING ke store lokal sebelum proses jalan.
+	if st := stateStoreInstance(); st != nil {
+		if err := st.SetRunning(task_id, c.event); err != nil {
+			log.Println("RunGoroutine :: SetRunning :: ", err)
+		}
 	}
 
 	c.Last_status = GetStatus().STATUS_FINISH
@@ -259,11 +271,19 @@ func (c *JobManagerEventItem) WatchProcessCMD(cmd *exec.Cmd, task_id string) {
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		fmt.Println(err)
+		c.Last_status = GetStatus().STATUS_ERROR
+		if st := stateStoreInstance(); st != nil {
+			_ = st.SetFinal(task_id, c.event, support.ProcessStatusFailed, -1, err.Error())
+		}
 		return
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		fmt.Println(err)
+		c.Last_status = GetStatus().STATUS_ERROR
+		if st := stateStoreInstance(); st != nil {
+			_ = st.SetFinal(task_id, c.event, support.ProcessStatusFailed, -1, err.Error())
+		}
 		return
 	}
 
@@ -271,10 +291,19 @@ func (c *JobManagerEventItem) WatchProcessCMD(cmd *exec.Cmd, task_id string) {
 	err = cmd.Start()
 
 	if err != nil {
+		// Task 3: proses gagal start -> catat final FAILED (exit_code -1) agar tidak tertinggal RUNNING.
+		c.Last_status = GetStatus().STATUS_ERROR
+		if st := stateStoreInstance(); st != nil {
+			_ = st.SetFinal(task_id, c.event, support.ProcessStatusFailed, -1, err.Error())
+		}
 		return
 	}
 
-	out := make([]byte, 1024)
+	// Task 3: penampung pesan stderr yang sama dengan ERROR_MESSAGE_STDERR.
+	var lastErrMu sync.Mutex
+	lastErrStr := ""
+	isMatchErr := false
+	errString := ""
 
 	helper.ShareDataOption(task_id, helper.ShareDataOptions{
 		DefaultTTLSeconds: 36000000,
@@ -283,28 +312,36 @@ func (c *JobManagerEventItem) WatchProcessCMD(cmd *exec.Cmd, task_id string) {
 	// no idle-timeout monitor (progress is expected via stdout)
 
 	// stderr reader: collect stderr but do not publish failed until process exit
+	var outputReaders sync.WaitGroup
+	outputReaders.Add(2)
 	go func(conn support.BrokerConnectionInterface) {
-		isMatchErr := false
-		errString := ""
+		defer outputReaders.Done()
+		stderrBuffer := make([]byte, 1024)
 		for {
-			n2, err2 := stderr.Read(out)
+			n2, err2 := stderr.Read(stderrBuffer)
 
 			if err2 != nil {
 				fmt.Println("stderr err :: ", err2)
 				break
 			}
 
-			fmt.Println("UPLOAD_ERROR:", string(out[:n2]))
+			fmt.Println("UPLOAD_ERROR:", string(stderrBuffer[:n2]))
 
-			// activity observed (progress is handled via stdout/stderr)
-
-			if support.Helper.ConfigYaml.ConfigData.End_point != "" {
-				// Add to share data with key ERROR_MESSAGE_STDERR
-				if !isMatchErr {
-					isMatchErr = true
-					errString = string(out[:n2])
+			// Task 3: simpan chunk error pertama (nilai yang sama dengan ERROR_MESSAGE_STDERR).
+			if !isMatchErr {
+				isMatchErr = true
+				errString = string(stderrBuffer[:n2])
+				lastErrMu.Lock()
+				lastErrStr = errString
+				lastErrMu.Unlock()
+				if support.Helper.ConfigYaml.ConfigData.End_point != "" {
 					go helper.ShareDataAdd(task_id, "ERROR_MESSAGE_STDERR", errString, 0)
 				}
+			}
+
+			// Aktivitas stdout/stderr memperbarui last_log_at, tanpa mengubah status final.
+			if st := stateStoreInstance(); st != nil {
+				_ = st.UpdateActivity(task_id)
 			}
 
 			c.Last_status = GetStatus().STATUS_ERROR
@@ -313,21 +350,30 @@ func (c *JobManagerEventItem) WatchProcessCMD(cmd *exec.Cmd, task_id string) {
 
 	// stdout reader: publish progress and reset idle timer
 	go func(conn support.BrokerConnectionInterface) {
+		defer outputReaders.Done()
+		stdoutBuffer := make([]byte, 1024)
 		for {
-			n, err := stdout.Read(out)
+			n, err := stdout.Read(stdoutBuffer)
 			if err != nil {
 				fmt.Println("stdout err :: ", err)
 				break
 			}
-			fmt.Println("UPLOAD_PROGRESS:", string(out[:n]))
+			fmt.Println("UPLOAD_PROGRESS:", string(stdoutBuffer[:n]))
 			// activity observed (progress is handled via stdout/stderr)
+			// Task 3: tandai aktivitas stdout pada store.
+			if st := stateStoreInstance(); st != nil {
+				_ = st.UpdateActivity(task_id)
+			}
 			if support.Helper.ConfigYaml.ConfigData.End_point != "" {
-				conn.Pub(task_id+"_process", string(out[:n]))
+				conn.Pub(task_id+"_process", string(stdoutBuffer[:n]))
 			}
 		}
 	}(c.conn)
 
-	// Wait for process exit and then decide final status
+	// Tunggu EOF kedua pipe dahulu (proses menutup stdout/stderr saat exit), baru panggil Wait.
+	// Dokumentasi exec.Cmd.StdoutPipe melarang Wait sebelum seluruh pembacaan selesai.
+	// Ini memastikan log/error terakhir masuk store sebelum status final ditulis.
+	outputReaders.Wait()
 	waitErr := cmd.Wait()
 
 	// determine exit code
@@ -352,6 +398,20 @@ func (c *JobManagerEventItem) WatchProcessCMD(cmd *exec.Cmd, task_id string) {
 	} else {
 		c.Last_status = GetStatus().STATUS_ERROR
 	}
+
+	// Task 3: catat status final ke store SEBELUM `_finish` terpublish (defer di RunGoroutine).
+	if st := stateStoreInstance(); st != nil {
+		finalStatus := support.ProcessStatusFinished
+		if exitCode != 0 {
+			finalStatus = support.ProcessStatusFailed
+		}
+		lastErrMu.Lock()
+		le := lastErrStr
+		lastErrMu.Unlock()
+		if err := st.SetFinal(task_id, c.event, finalStatus, exitCode, le); err != nil {
+			log.Println("WatchProcessCMD :: SetFinal :: ", err)
+		}
+	}
 }
 
 type brokerConStatus struct {
@@ -371,4 +431,62 @@ func GetStatus() brokerConStatus {
 		STATUS_TERMINATE: "terminate",
 		STATUS_FINISH:    "finish",
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Task 3 (WO-2026-10-09-001): persistensi state proses ke SQLite lokal.
+// Hanya proses ini (yang menjalankan job) yang menulis store -> single-writer.
+// Store dibuka lazy: kegagalan init bersifat non-fatal (persistensi dinonaktifkan,
+// alur `_process`/`_finish` tetap berjalan).
+// ---------------------------------------------------------------------------
+
+var (
+	stateStoreOnce sync.Once
+	stateStoreInst *support.ProcessStateStore
+)
+
+// stateStoreInstance membuka store sekali (lazy) dan memulai maintenance retensi.
+func stateStoreInstance() *support.ProcessStateStore {
+	stateStoreOnce.Do(func() {
+		st, err := support.InitProcessStateStore("")
+		if err != nil {
+			log.Println("state store :: init failed, persistence disabled :: ", err)
+			return
+		}
+		support.RegisterProcessStateStore(st)
+		stateStoreInst = st
+		startStateMaintenance(st)
+	})
+	return stateStoreInst
+}
+
+// stateRetention membaca retensi dari env JOB_ITEM_STATE_RETENTION_HOURS (default 24 jam).
+func stateRetention() time.Duration {
+	hours := 24
+	if v := os.Getenv("JOB_ITEM_STATE_RETENTION_HOURS"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
+			hours = parsed
+		}
+	}
+	return time.Duration(hours) * time.Hour
+}
+
+// startStateMaintenance menjalankan Cleanup retensi saat startup lalu periodik tiap jam.
+func startStateMaintenance(st *support.ProcessStateStore) {
+	retention := stateRetention()
+	runCleanup := func() {
+		if n, err := st.Cleanup(retention); err != nil {
+			log.Println("state store :: cleanup error :: ", err)
+		} else if n > 0 {
+			fmt.Println("state store :: cleanup removed", n, "record(s)")
+		}
+	}
+	runCleanup()
+	go func() {
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			runCleanup()
+		}
+	}()
 }
