@@ -89,3 +89,69 @@ func TestWatchProcessCMD_StartFailureNotLeftRunning(t *testing.T) {
 		t.Fatalf("start failure must be FAILED exit -1, got %+v", got)
 	}
 }
+
+// mockBroker mengimplementasikan support.BrokerConnectionInterface untuk mengamati urutan
+// publish `_finish` relatif terhadap penulisan state final.
+type mockBroker struct {
+	pub func(topic, message string)
+}
+
+func (b *mockBroker) Pub(topic, message string) {
+	if b.pub != nil {
+		b.pub(topic, message)
+	}
+}
+func (b *mockBroker) Sub(string, string, func(string)) (func(), error) { return func() {}, nil }
+func (b *mockBroker) SubSync(string, string, func(string, error), support.SubSyncOpts) (bool, error) {
+	return false, nil
+}
+func (b *mockBroker) GetBroker_P() any         { return b }
+func (b *mockBroker) SetKey_P(string)          {}
+func (b *mockBroker) GetKey_P() string         { return "mock" }
+func (b *mockBroker) IsConnected() bool        { return true }
+func (b *mockBroker) GetRefreshPubSub() string { return "refresh" }
+func (b *mockBroker) BasicSub(string, func(string)) (func(), error) {
+	return func() {}, nil
+}
+func (b *mockBroker) BasicSubSync(string, func(string, error), support.SubSyncOpts) (bool, error) {
+	return false, nil
+}
+
+// TestRunGoroutine_FinalStateBeforeFinishPublish memverifikasi acceptance Task 3:
+// saat `_finish` di-publish, store SUDAH berisi status final.
+func TestRunGoroutine_FinalStateBeforeFinishPublish(t *testing.T) {
+	st := setupEventTest(t)
+
+	var (
+		mu       sync.Mutex
+		observed bool
+		pubErr   error
+	)
+	broker := &mockBroker{}
+	broker.pub = func(topic, _ string) {
+		if !strings.HasSuffix(topic, "_finish") {
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		jobID := strings.TrimSuffix(topic, "_finish")
+		state, found, err := st.Get(jobID)
+		if err != nil {
+			pubErr = err
+			return
+		}
+		observed = found && state.Status == support.ProcessStatusFinished && state.ExitCode == 0
+	}
+
+	item := JobManagerEventItem{conn: broker}
+	item.RunGoroutine("echo hello", "task-order", "test.order")
+
+	mu.Lock()
+	defer mu.Unlock()
+	if pubErr != nil {
+		t.Fatalf("error reading state during _finish publish: %v", pubErr)
+	}
+	if !observed {
+		t.Fatal("_finish published before final state persisted in store")
+	}
+}
