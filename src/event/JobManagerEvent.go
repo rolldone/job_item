@@ -34,13 +34,14 @@ type MessageJson struct {
 	Action  string      `json:"action,omitempty"`
 }
 
-func JobManagerEventConstruct() JobManagerEvent {
-	gg := JobManagerEvent{}
-	return gg
+func JobManagerEventConstruct() *JobManagerEvent {
+	return &JobManagerEvent{}
 }
 
 type JobManagerEvent struct {
-	conn support.BrokerConnectionInterface
+	conn           support.BrokerConnectionInterface
+	controlUnsubMu sync.Mutex
+	controlUnsub   func()
 }
 
 // Helper function to subscribe and process job events
@@ -165,6 +166,10 @@ func (c *JobManagerEvent) ListenEvent(conn_name string) {
 		} else {
 			_ = append(unsubcribes, unsub)
 		}
+
+		// Task 4 (WO-2026-10-09-001): listener control topic `<identity_id>.control`.
+		unsubControl := c.listenControlTopic(conn)
+		_ = append(unsubcribes, unsubControl)
 	}
 	initPubSubChannel()
 	// Subscribe to a custom event (replace "custom_event" and handler as needed)
@@ -209,12 +214,8 @@ func (c *JobManagerEventItem) RunGoroutine(command string, task_id string, event
 		log.Println("RunGoroutine :: err :: 23940239407 :: ", err)
 	}
 
-	// Task 3 (WO-2026-10-09-001): catat state RUNNING ke store lokal sebelum proses jalan.
-	if st := stateStoreInstance(); st != nil {
-		if err := st.SetRunning(task_id, c.event); err != nil {
-			log.Println("RunGoroutine :: SetRunning :: ", err)
-		}
-	}
+	// Task 3/4 (WO-2026-10-09-001): catat state RUNNING (store + fallback registry) sebelum proses jalan.
+	recordRunning(task_id, c.event)
 
 	c.Last_status = GetStatus().STATUS_FINISH
 	defer func(last_status *string) {
@@ -272,18 +273,14 @@ func (c *JobManagerEventItem) WatchProcessCMD(cmd *exec.Cmd, task_id string) {
 	if err != nil {
 		fmt.Println(err)
 		c.Last_status = GetStatus().STATUS_ERROR
-		if st := stateStoreInstance(); st != nil {
-			_ = st.SetFinal(task_id, c.event, support.ProcessStatusFailed, -1, err.Error())
-		}
+		recordFinal(task_id, c.event, support.ProcessStatusFailed, -1, err.Error())
 		return
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		fmt.Println(err)
 		c.Last_status = GetStatus().STATUS_ERROR
-		if st := stateStoreInstance(); st != nil {
-			_ = st.SetFinal(task_id, c.event, support.ProcessStatusFailed, -1, err.Error())
-		}
+		recordFinal(task_id, c.event, support.ProcessStatusFailed, -1, err.Error())
 		return
 	}
 
@@ -291,11 +288,9 @@ func (c *JobManagerEventItem) WatchProcessCMD(cmd *exec.Cmd, task_id string) {
 	err = cmd.Start()
 
 	if err != nil {
-		// Task 3: proses gagal start -> catat final FAILED (exit_code -1) agar tidak tertinggal RUNNING.
+		// Task 3/4: proses gagal start -> catat final FAILED (exit_code -1) agar tidak tertinggal RUNNING.
 		c.Last_status = GetStatus().STATUS_ERROR
-		if st := stateStoreInstance(); st != nil {
-			_ = st.SetFinal(task_id, c.event, support.ProcessStatusFailed, -1, err.Error())
-		}
+		recordFinal(task_id, c.event, support.ProcessStatusFailed, -1, err.Error())
 		return
 	}
 
@@ -399,19 +394,15 @@ func (c *JobManagerEventItem) WatchProcessCMD(cmd *exec.Cmd, task_id string) {
 		c.Last_status = GetStatus().STATUS_ERROR
 	}
 
-	// Task 3: catat status final ke store SEBELUM `_finish` terpublish (defer di RunGoroutine).
-	if st := stateStoreInstance(); st != nil {
-		finalStatus := support.ProcessStatusFinished
-		if exitCode != 0 {
-			finalStatus = support.ProcessStatusFailed
-		}
-		lastErrMu.Lock()
-		le := lastErrStr
-		lastErrMu.Unlock()
-		if err := st.SetFinal(task_id, c.event, finalStatus, exitCode, le); err != nil {
-			log.Println("WatchProcessCMD :: SetFinal :: ", err)
-		}
+	// Task 3/4: catat status final (store + fallback registry) SEBELUM `_finish` terpublish.
+	finalStatus := support.ProcessStatusFinished
+	if exitCode != 0 {
+		finalStatus = support.ProcessStatusFailed
 	}
+	lastErrMu.Lock()
+	le := lastErrStr
+	lastErrMu.Unlock()
+	recordFinal(task_id, c.event, finalStatus, exitCode, le)
 }
 
 type brokerConStatus struct {
