@@ -1,2 +1,9 @@
 scripts/node_modules
 scripts/venv
+
+# Process state store lokal (WO-2026-10-09-001 Task 2) — jangan di-commit
+.job_item_data/
+*.job_item_data
+state.db
+state.db-wal
+state.db-shm
