@@ -628,6 +628,54 @@ CMD ["./job_item"]
 - `CONFIG_PATH`: Path to configuration file
 - `LOG_LEVEL`: Logging level (DEBUG, INFO, WARN, ERROR)
 - `WORKER_ID`: Override worker identity ID
+- `JOB_ITEM_DATA_DIR`: Override data directory for the process-state SQLite store (default `.job_item_data`)
+- `JOB_ITEM_STATE_RETENTION_HOURS`: Retention (hours) for final process-state rows before cleanup (default `24`)
+
+## Status Check & Process State Store
+
+The worker answers on-demand status checks from the Job Manager and keeps a local record of each
+process so it can still answer after a restart.
+
+### Control topic
+
+- **Topic**: `<identity_id>.control` (subscribed via `BasicSub`; broadcast per topic so only the
+  worker holding the job replies).
+- **Request**:
+
+```json
+{ "action": "check_status", "request_id": "<uuid v7>", "job_id": "<job_record.uuid>", "event": "<event name>" }
+```
+
+- **Response topic**: `<request_id>.control_response`, e.g.
+
+```json
+{ "request_id": "<uuid v7>", "job_id": "<job_record.uuid>", "identity_id": "<identity_id>", "status": "RUNNING|FINISHED|FAILED|NOT_FOUND", "event": "<event name>" }
+```
+
+Malformed payloads are ignored and never crash the worker. The lookup order is: SQLite store →
+in-memory registry fallback → `NOT_FOUND`.
+
+### Process state store
+
+State is persisted to a per-instance SQLite database (see `support/ProcessStateStore.go`):
+
+- **Default path**: `<working dir>/.job_item_data/state.db`. One database per instance; no sharing
+  between instances on the same host.
+- **Path precedence**: env `JOB_ITEM_DATA_DIR` > YAML `data_dir` > explicit `Init` argument > default.
+- **Table** `process_state`: `job_id`, `event`, `status` (`RUNNING`/`FINISHED`/`FAILED`),
+  `started_at`, `updated_at`, `finished_at`, `exit_code`, `last_log_at`, `last_error`.
+- **SQLite mode**: WAL, `busy_timeout` 5s, `synchronous=NORMAL`, single-writer (one connection).
+- **Driver**: `modernc.org/sqlite` (CGO-free) so `build.sh` keeps working with `CGO_ENABLED=0`.
+- **Lifecycle**: `RUNNING` is recorded when the process starts; progress updates `last_log_at` only;
+  the final state (and `last_error`) is written **before** the `_finish` event is published; the
+  JOB_ITEM_STATE_RETENTION_HOURS cleanup runs at startup and hourly.
+
+Optional YAML override:
+
+```yaml
+# config.yaml
+data_dir: "/var/lib/job-item"   # optional; env JOB_ITEM_DATA_DIR wins over this
+```
 
 ## Troubleshooting
 
