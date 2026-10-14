@@ -97,6 +97,16 @@ func recordFinal(taskID, eventName, status string, exitCode int, lastError strin
 	}
 }
 
+// recordFinalCompatible mencatat status final dengan pemetaan kompatibel untuk check_status.
+func recordFinalCompatible(taskID, eventName, status string, exitCode int, lastError string) {
+	registrySet(taskID, status)
+	if st := stateStoreInstance(); st != nil {
+		if err := st.SetFinal(taskID, eventName, status, exitCode, lastError); err != nil {
+			log.Println("control :: SetFinal :: ", err)
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Listener
 // ---------------------------------------------------------------------------
@@ -189,6 +199,9 @@ func lookupJobStatus(req ControlRequest) (status string, eventName string) {
 		} else if found {
 			if req.Event != "" && state.Event != "" && req.Event != state.Event {
 				log.Printf("control :: event mismatch job=%s request=%s stored=%s", req.JobID, req.Event, state.Event)
+			}
+			if state.Status == support.ProcessStatusTerminated {
+				return support.ProcessStatusFailed, state.Event
 			}
 			return state.Status, state.Event
 		} else {

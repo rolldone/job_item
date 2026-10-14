@@ -182,7 +182,112 @@ func (c *JobManagerEvent) ListenEvent(conn_name string) {
 type JobManagerEventItem struct {
 	conn        support.BrokerConnectionInterface
 	Last_status string
+	statusMu    sync.Mutex
+	terminate   string
+	started     bool
 	event       string
+}
+
+func (c *JobManagerEventItem) markStarted() {
+	c.statusMu.Lock()
+	c.started = true
+	c.statusMu.Unlock()
+}
+
+func (c *JobManagerEventItem) setStatus(status string) {
+	c.statusMu.Lock()
+	c.Last_status = status
+	c.statusMu.Unlock()
+}
+
+func (c *JobManagerEventItem) setIntentStatus(status string) {
+	c.statusMu.Lock()
+	c.terminate = status
+	c.Last_status = status
+	c.statusMu.Unlock()
+}
+
+func (c *JobManagerEventItem) finalStatus(exitCode int) (string, string) {
+	c.statusMu.Lock()
+	defer c.statusMu.Unlock()
+	if c.terminate != "" {
+		return c.terminate, support.ProcessStatusTerminated
+	}
+	if exitCode == 0 {
+		c.Last_status = GetStatus().STATUS_FINISH
+		return c.Last_status, support.ProcessStatusFinished
+	}
+	c.Last_status = GetStatus().STATUS_ERROR
+	return c.Last_status, support.ProcessStatusFailed
+}
+
+func (c *JobManagerEventItem) setStatusIfNoIntent(status string) {
+	c.statusMu.Lock()
+	if c.terminate == "" {
+		c.Last_status = status
+	}
+	c.statusMu.Unlock()
+}
+
+func (c *JobManagerEventItem) lastStatus() string {
+	c.statusMu.Lock()
+	defer c.statusMu.Unlock()
+	return c.Last_status
+}
+
+// terminateGracePeriod membaca grace SIGTERM -> SIGKILL dari env
+// JOB_ITEM_TERMINATE_GRACE_SECONDS (default 5 detik, SPEC D-8).
+func terminateGracePeriod() time.Duration {
+	grace := 5
+	if v := os.Getenv("JOB_ITEM_TERMINATE_GRACE_SECONDS"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed >= 0 {
+			grace = parsed
+		}
+	}
+	return time.Duration(grace) * time.Second
+}
+
+// killProcessTree menghentikan seluruh process tree milik cmd (SPEC D-1/D-2/D-10).
+// POSIX: SIGTERM ke process group -> grace -> SIGKILL ke process group, idempoten.
+// Windows: taskkill /PID <pid> /T /F. Mengembalikan error kill terakhir (nil bila sukses/no-op).
+func killProcessTree(cmd *exec.Cmd, taskID string) error {
+	if cmd == nil || cmd.Process == nil {
+		log.Printf("[TRACE-TERM] timestamp=%s stage=killProcessTree task_id=%q result=no_process", time.Now().UTC().Format(time.RFC3339Nano), taskID)
+		return nil
+	}
+	pid := cmd.Process.Pid
+	if runtime.GOOS == "windows" {
+		taskkill := exec.Command("taskkill", "/PID", strconv.Itoa(pid), "/T", "/F")
+		err := taskkill.Run()
+		log.Printf("[TRACE-TERM] timestamp=%s stage=killProcessTree task_id=%q pid=%d method=taskkill err=%v", time.Now().UTC().Format(time.RFC3339Nano), taskID, pid, err)
+		return err
+	}
+	pgid := pid
+	// cmd dijalankan dengan Setpgid sehingga pgid == pid shell.
+	errTerm := syscall.Kill(-pgid, syscall.SIGTERM)
+	log.Printf("[TRACE-TERM] timestamp=%s stage=killProcessTree task_id=%q pgid=%d method=sigterm err=%v", time.Now().UTC().Format(time.RFC3339Nano), taskID, pgid, errTerm)
+	if errTerm != nil {
+		// Proses/grup sudah mati (ESRCH) -> anggap sukses, idempoten.
+		return nil
+	}
+	grace := terminateGracePeriod()
+	if grace == 0 {
+		errKill := syscall.Kill(-pgid, syscall.SIGKILL)
+		log.Printf("[TRACE-TERM] timestamp=%s stage=killProcessTree task_id=%q pgid=%d method=sigkill_immediate err=%v", time.Now().UTC().Format(time.RFC3339Nano), taskID, pgid, errKill)
+		return errKill
+	}
+	deadline := time.Now().Add(grace)
+	for time.Now().Before(deadline) {
+		// kill(-pgid, 0): nil = grup masih ada; ESRCH = grup sudah mati.
+		if err := syscall.Kill(-pgid, 0); err != nil {
+			log.Printf("[TRACE-TERM] timestamp=%s stage=killProcessTree task_id=%q pgid=%d method=exited_during_grace", time.Now().UTC().Format(time.RFC3339Nano), taskID, pgid)
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	errKill := syscall.Kill(-pgid, syscall.SIGKILL)
+	log.Printf("[TRACE-TERM] timestamp=%s stage=killProcessTree task_id=%q pgid=%d method=sigkill_after_grace grace=%s err=%v", time.Now().UTC().Format(time.RFC3339Nano), taskID, pgid, grace, errKill)
+	return errKill
 }
 
 func (c *JobManagerEventItem) RunGoroutine(command string, task_id string, eventName string) {
@@ -194,12 +299,12 @@ func (c *JobManagerEventItem) RunGoroutine(command string, task_id string, event
 		messageObject := MessageJson{}
 		json.Unmarshal([]byte(message), &messageObject)
 		if messageObject.Action == GetStatus().STATUS_TIMEOUT {
-			c.Last_status = GetStatus().STATUS_TIMEOUT
+			c.setIntentStatus(GetStatus().STATUS_TIMEOUT)
 			eventTopic := fmt.Sprint(messageObject.Task_id, "_", "timeout")
 			log.Printf("[TRACE-TERM] timestamp=%s stage=eventbus_publish task_id=%q topic=%q action=%q", time.Now().UTC().Format(time.RFC3339Nano), messageObject.Task_id, eventTopic, messageObject.Action)
 			support.Helper.EventBus.GetBus().Publish(eventTopic)
 		} else if messageObject.Action == GetStatus().STATUS_TERMINATE {
-			c.Last_status = GetStatus().STATUS_TERMINATE
+			c.setIntentStatus(GetStatus().STATUS_TERMINATE)
 			eventTopic := fmt.Sprint(messageObject.Task_id, "_", "terminate")
 			log.Printf("[TRACE-TERM] timestamp=%s stage=eventbus_publish task_id=%q topic=%q action=%q", time.Now().UTC().Format(time.RFC3339Nano), messageObject.Task_id, eventTopic, messageObject.Action)
 			support.Helper.EventBus.GetBus().Publish(eventTopic)
@@ -222,21 +327,23 @@ func (c *JobManagerEventItem) RunGoroutine(command string, task_id string, event
 	// Task 3/4 (WO-2026-10-09-001): catat state RUNNING (store + fallback registry) sebelum proses jalan.
 	recordRunning(task_id, c.event)
 
-	c.Last_status = GetStatus().STATUS_FINISH
-	defer func(last_status *string) {
+	c.setStatus(GetStatus().STATUS_FINISH)
+	defer func() {
 		unsub()
 		unsubListen()
 		fmt.Println("Closed goroutine")
-		time.Sleep(time.Duration(time.Second) * 3)
-		c.conn.Pub(fmt.Sprint(task_id, "_", "finish"), *last_status)
-	}(&c.Last_status)
+		time.Sleep(3 * time.Second)
+		c.conn.Pub(fmt.Sprint(task_id, "_", "finish"), c.lastStatus())
+	}()
 
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
-		cmd = exec.Command("cmd", "/K", command)
+		cmd = exec.Command("cmd", "/C", command)
 	} else {
 		cmd = exec.Command("bash", "-c", command)
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	}
+	cmd.WaitDelay = 2 * time.Second
 
 	envInvolve := append(os.Environ(),
 		// For child processes
@@ -257,17 +364,21 @@ func (c *JobManagerEventItem) WatchProcessCMD(cmd *exec.Cmd, task_id string) {
 
 	// Create function kill process
 	killProcess := func() {
-		processpid := 0
-		if cmd.Process != nil {
-			processpid = cmd.Process.Pid
-		}
-		log.Printf("[TRACE-TERM] timestamp=%s stage=killProcess_entry task_id=%q pid=%d processpid=%d", time.Now().UTC().Format(time.RFC3339Nano), task_id, processpid, processpid)
-		if cmd.Process != nil {
-			err := cmd.Process.Kill()
-			log.Printf("[TRACE-TERM] timestamp=%s stage=killProcess_exit task_id=%q pid=%d processpid=%d err=%v", time.Now().UTC().Format(time.RFC3339Nano), task_id, processpid, processpid, err)
+		c.statusMu.Lock()
+		started := c.started
+		c.statusMu.Unlock()
+		if !started {
+			log.Printf("[TRACE-TERM] timestamp=%s stage=killProcess task_id=%q result=not_started", time.Now().UTC().Format(time.RFC3339Nano), task_id)
 			return
 		}
-		log.Printf("[TRACE-TERM] timestamp=%s stage=killProcess_exit task_id=%q pid=0 processpid=0 err=no_process", time.Now().UTC().Format(time.RFC3339Nano), task_id)
+		if cmd.Process == nil {
+			log.Printf("[TRACE-TERM] timestamp=%s stage=killProcess_exit task_id=%q pid=0 processpid=0 err=no_process", time.Now().UTC().Format(time.RFC3339Nano), task_id)
+			return
+		}
+		processpid := cmd.Process.Pid
+		log.Printf("[TRACE-TERM] timestamp=%s stage=killProcess_entry task_id=%q pid=%d processpid=%d", time.Now().UTC().Format(time.RFC3339Nano), task_id, processpid, processpid)
+		err := killProcessTree(cmd, task_id)
+		log.Printf("[TRACE-TERM] timestamp=%s stage=killProcess_exit task_id=%q pid=%d processpid=%d err=%v", time.Now().UTC().Format(time.RFC3339Nano), task_id, processpid, processpid, err)
 	}
 
 	// Subcribe the kill process action
@@ -285,24 +396,25 @@ func (c *JobManagerEventItem) WatchProcessCMD(cmd *exec.Cmd, task_id string) {
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		fmt.Println(err)
-		c.Last_status = GetStatus().STATUS_ERROR
+		c.setStatusIfNoIntent(GetStatus().STATUS_ERROR)
 		recordFinal(task_id, c.event, support.ProcessStatusFailed, -1, err.Error())
 		return
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		fmt.Println(err)
-		c.Last_status = GetStatus().STATUS_ERROR
+		c.setStatusIfNoIntent(GetStatus().STATUS_ERROR)
 		recordFinal(task_id, c.event, support.ProcessStatusFailed, -1, err.Error())
 		return
 	}
 
 	// starting the command
 	err = cmd.Start()
+	c.markStarted()
 
 	if err != nil {
 		// Task 3/4: proses gagal start -> catat final FAILED (exit_code -1) agar tidak tertinggal RUNNING.
-		c.Last_status = GetStatus().STATUS_ERROR
+		c.setStatusIfNoIntent(GetStatus().STATUS_ERROR)
 		recordFinal(task_id, c.event, support.ProcessStatusFailed, -1, err.Error())
 		return
 	}
@@ -352,7 +464,7 @@ func (c *JobManagerEventItem) WatchProcessCMD(cmd *exec.Cmd, task_id string) {
 				_ = st.UpdateActivity(task_id)
 			}
 
-			c.Last_status = GetStatus().STATUS_ERROR
+			c.setStatusIfNoIntent(GetStatus().STATUS_ERROR)
 		}
 	}(c.conn)
 
@@ -400,22 +512,20 @@ func (c *JobManagerEventItem) WatchProcessCMD(cmd *exec.Cmd, task_id string) {
 		exitCode = 0
 	}
 
-	// publish final status only via RunGoroutine's defer: set Last_status here
-	if exitCode == 0 {
-		c.Last_status = GetStatus().STATUS_FINISH
-	} else {
-		c.Last_status = GetStatus().STATUS_ERROR
-	}
+	// publish final status only via RunGoroutine's defer: set Last_status here.
+	// Niat terminate/timeout yang sudah tercatat tidak boleh ditimpa exit code (SPEC D-4).
+	finalBrokerStatus, finalStoreStatus := c.finalStatus(exitCode)
 
 	// Task 3/4: catat status final (store + fallback registry) SEBELUM `_finish` terpublish.
-	finalStatus := support.ProcessStatusFinished
-	if exitCode != 0 {
-		finalStatus = support.ProcessStatusFailed
-	}
 	lastErrMu.Lock()
 	le := lastErrStr
 	lastErrMu.Unlock()
-	recordFinal(task_id, c.event, finalStatus, exitCode, le)
+	if finalStoreStatus == support.ProcessStatusTerminated {
+		recordFinalCompatible(task_id, c.event, finalStoreStatus, exitCode, le)
+	} else {
+		recordFinal(task_id, c.event, finalStoreStatus, exitCode, le)
+	}
+	_ = finalBrokerStatus
 }
 
 type brokerConStatus struct {

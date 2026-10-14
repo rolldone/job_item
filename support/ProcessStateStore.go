@@ -28,9 +28,10 @@ import (
 
 // Status state proses yang dipahami store. Nilai ini yang dibalas pada control topic (Task 4).
 const (
-	ProcessStatusRunning  = "RUNNING"
-	ProcessStatusFinished = "FINISHED"
-	ProcessStatusFailed   = "FAILED"
+	ProcessStatusRunning    = "RUNNING"
+	ProcessStatusFinished   = "FINISHED"
+	ProcessStatusFailed     = "FAILED"
+	ProcessStatusTerminated = "TERMINATED"
 )
 
 // ProcessState merepresentasikan satu baris process_state.
@@ -198,7 +199,7 @@ func (s *ProcessStateStore) UpdateActivity(jobID string) error {
 	return nil
 }
 
-// SetFinal menyimpan status final (FINISHED/FAILED) beserta exit_code dan last_error.
+// SetFinal menyimpan status final (FINISHED/FAILED/TERMINATED) beserta exit_code dan last_error.
 // Bila record belum ada (mis. store baru diaktifkan saat proses sudah berjalan), row dibuat.
 // started_at diisi now bila insert baru; tidak menimpa nilai existing pada update.
 func (s *ProcessStateStore) SetFinal(jobID, event, status string, exitCode int, lastError string) error {
@@ -208,7 +209,7 @@ func (s *ProcessStateStore) SetFinal(jobID, event, status string, exitCode int, 
 	if jobID == "" {
 		return errors.New("SetFinal: empty job_id")
 	}
-	if status != ProcessStatusFinished && status != ProcessStatusFailed {
+	if status != ProcessStatusFinished && status != ProcessStatusFailed && status != ProcessStatusTerminated {
 		return fmt.Errorf("SetFinal: status %q is not final", status)
 	}
 	now := nowUTC()
@@ -283,10 +284,10 @@ func (s *ProcessStateStore) Cleanup(retention time.Duration) (int64, error) {
 	}
 	cutoff := time.Now().UTC().Add(-retention).Format(stateTimeLayout)
 	const q = `DELETE FROM process_state
-WHERE status IN (?1, ?2)
+WHERE status IN (?1, ?2, ?4)
   AND finished_at IS NOT NULL
   AND finished_at < ?3;`
-	res, err := s.db.Exec(q, ProcessStatusFinished, ProcessStatusFailed, cutoff)
+	res, err := s.db.Exec(q, ProcessStatusFinished, ProcessStatusFailed, cutoff, ProcessStatusTerminated)
 	if err != nil {
 		return 0, fmt.Errorf("Cleanup: %w", err)
 	}
