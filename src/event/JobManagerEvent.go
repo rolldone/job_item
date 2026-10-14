@@ -12,7 +12,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/hoisie/mustache"
@@ -247,49 +246,6 @@ func terminateGracePeriod() time.Duration {
 	return time.Duration(grace) * time.Second
 }
 
-// killProcessTree menghentikan seluruh process tree milik cmd (SPEC D-1/D-2/D-10).
-// POSIX: SIGTERM ke process group -> grace -> SIGKILL ke process group, idempoten.
-// Windows: taskkill /PID <pid> /T /F. Mengembalikan error kill terakhir (nil bila sukses/no-op).
-func killProcessTree(cmd *exec.Cmd, taskID string) error {
-	if cmd == nil || cmd.Process == nil {
-		log.Printf("[TRACE-TERM] timestamp=%s stage=killProcessTree task_id=%q result=no_process", time.Now().UTC().Format(time.RFC3339Nano), taskID)
-		return nil
-	}
-	pid := cmd.Process.Pid
-	if runtime.GOOS == "windows" {
-		taskkill := exec.Command("taskkill", "/PID", strconv.Itoa(pid), "/T", "/F")
-		err := taskkill.Run()
-		log.Printf("[TRACE-TERM] timestamp=%s stage=killProcessTree task_id=%q pid=%d method=taskkill err=%v", time.Now().UTC().Format(time.RFC3339Nano), taskID, pid, err)
-		return err
-	}
-	pgid := pid
-	// cmd dijalankan dengan Setpgid sehingga pgid == pid shell.
-	errTerm := syscall.Kill(-pgid, syscall.SIGTERM)
-	log.Printf("[TRACE-TERM] timestamp=%s stage=killProcessTree task_id=%q pgid=%d method=sigterm err=%v", time.Now().UTC().Format(time.RFC3339Nano), taskID, pgid, errTerm)
-	if errTerm != nil {
-		// Proses/grup sudah mati (ESRCH) -> anggap sukses, idempoten.
-		return nil
-	}
-	grace := terminateGracePeriod()
-	if grace == 0 {
-		errKill := syscall.Kill(-pgid, syscall.SIGKILL)
-		log.Printf("[TRACE-TERM] timestamp=%s stage=killProcessTree task_id=%q pgid=%d method=sigkill_immediate err=%v", time.Now().UTC().Format(time.RFC3339Nano), taskID, pgid, errKill)
-		return errKill
-	}
-	deadline := time.Now().Add(grace)
-	for time.Now().Before(deadline) {
-		// kill(-pgid, 0): nil = grup masih ada; ESRCH = grup sudah mati.
-		if err := syscall.Kill(-pgid, 0); err != nil {
-			log.Printf("[TRACE-TERM] timestamp=%s stage=killProcessTree task_id=%q pgid=%d method=exited_during_grace", time.Now().UTC().Format(time.RFC3339Nano), taskID, pgid)
-			return nil
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	errKill := syscall.Kill(-pgid, syscall.SIGKILL)
-	log.Printf("[TRACE-TERM] timestamp=%s stage=killProcessTree task_id=%q pgid=%d method=sigkill_after_grace grace=%s err=%v", time.Now().UTC().Format(time.RFC3339Nano), taskID, pgid, grace, errKill)
-	return errKill
-}
-
 func (c *JobManagerEventItem) RunGoroutine(command string, task_id string, eventName string) {
 	c.event = eventName
 	project_app_uuid := support.Helper.ConfigYaml.ConfigData.Uuid
@@ -341,7 +297,7 @@ func (c *JobManagerEventItem) RunGoroutine(command string, task_id string, event
 		cmd = exec.Command("cmd", "/C", command)
 	} else {
 		cmd = exec.Command("bash", "-c", command)
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		configureJobProcess(cmd)
 	}
 	cmd.WaitDelay = 2 * time.Second
 
@@ -500,7 +456,7 @@ func (c *JobManagerEventItem) WatchProcessCMD(cmd *exec.Cmd, task_id string) {
 	exitCode := 0
 	if waitErr != nil {
 		if exitErr, ok := waitErr.(*exec.ExitError); ok {
-			if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
+			if status, ok := exitErr.Sys().(interface{ ExitStatus() int }); ok {
 				exitCode = status.ExitStatus()
 			} else {
 				exitCode = 1

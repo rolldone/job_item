@@ -5,7 +5,7 @@ package event
 
 import (
 	"os/exec"
-	"syscall"
+	"runtime"
 	"testing"
 	"time"
 
@@ -36,7 +36,9 @@ func TestWatchProcessCMD_TerminateKillsTreeAndKeepsStatus(t *testing.T) {
 	item := &JobManagerEventItem{event: "test.term"}
 	taskID := "task-term-tree"
 	cmd := exec.Command("bash", "-c", "sleep 30; echo done")
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if runtime.GOOS != "windows" {
+		configureJobProcess(cmd)
+	}
 	cmd.WaitDelay = 2 * time.Second
 
 	done := make(chan struct{})
