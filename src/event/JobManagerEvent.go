@@ -189,15 +189,20 @@ func (c *JobManagerEventItem) RunGoroutine(command string, task_id string, event
 	c.event = eventName
 	project_app_uuid := support.Helper.ConfigYaml.ConfigData.Uuid
 	unsub, err := c.conn.Sub(task_id+"_worker", project_app_uuid, func(message string) {
-		// fmt.Println(sub_key, " :: ", message)
+		traceTimestamp := time.Now().UTC().Format(time.RFC3339Nano)
+		log.Printf("[TRACE-TERM] timestamp=%s stage=worker_callback task_id=%q topic=%q payload=%s", traceTimestamp, task_id, task_id+"_worker", message)
 		messageObject := MessageJson{}
 		json.Unmarshal([]byte(message), &messageObject)
 		if messageObject.Action == GetStatus().STATUS_TIMEOUT {
 			c.Last_status = GetStatus().STATUS_TIMEOUT
-			support.Helper.EventBus.GetBus().Publish(fmt.Sprint(messageObject.Task_id, "_", "timeout"))
+			eventTopic := fmt.Sprint(messageObject.Task_id, "_", "timeout")
+			log.Printf("[TRACE-TERM] timestamp=%s stage=eventbus_publish task_id=%q topic=%q action=%q", time.Now().UTC().Format(time.RFC3339Nano), messageObject.Task_id, eventTopic, messageObject.Action)
+			support.Helper.EventBus.GetBus().Publish(eventTopic)
 		} else if messageObject.Action == GetStatus().STATUS_TERMINATE {
 			c.Last_status = GetStatus().STATUS_TERMINATE
-			support.Helper.EventBus.GetBus().Publish(fmt.Sprint(messageObject.Task_id, "_", "terminate"))
+			eventTopic := fmt.Sprint(messageObject.Task_id, "_", "terminate")
+			log.Printf("[TRACE-TERM] timestamp=%s stage=eventbus_publish task_id=%q topic=%q action=%q", time.Now().UTC().Format(time.RFC3339Nano), messageObject.Task_id, eventTopic, messageObject.Action)
+			support.Helper.EventBus.GetBus().Publish(eventTopic)
 		}
 	})
 	if err != nil {
@@ -252,9 +257,17 @@ func (c *JobManagerEventItem) WatchProcessCMD(cmd *exec.Cmd, task_id string) {
 
 	// Create function kill process
 	killProcess := func() {
+		processpid := 0
 		if cmd.Process != nil {
-			cmd.Process.Kill()
+			processpid = cmd.Process.Pid
 		}
+		log.Printf("[TRACE-TERM] timestamp=%s stage=killProcess_entry task_id=%q pid=%d processpid=%d", time.Now().UTC().Format(time.RFC3339Nano), task_id, processpid, processpid)
+		if cmd.Process != nil {
+			err := cmd.Process.Kill()
+			log.Printf("[TRACE-TERM] timestamp=%s stage=killProcess_exit task_id=%q pid=%d processpid=%d err=%v", time.Now().UTC().Format(time.RFC3339Nano), task_id, processpid, processpid, err)
+			return
+		}
+		log.Printf("[TRACE-TERM] timestamp=%s stage=killProcess_exit task_id=%q pid=0 processpid=0 err=no_process", time.Now().UTC().Format(time.RFC3339Nano), task_id)
 	}
 
 	// Subcribe the kill process action
