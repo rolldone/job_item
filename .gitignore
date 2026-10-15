@@ -5,6 +5,7 @@ scripts/venv
 .env
 .env.*
 !.env.example
+config.yaml
 
 # Process state store lokal (WO-2026-10-09-001 Task 2) — jangan di-commit
 .job_item_data/
