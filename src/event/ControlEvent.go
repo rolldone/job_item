@@ -200,9 +200,6 @@ func lookupJobStatus(req ControlRequest) (status string, eventName string) {
 			if req.Event != "" && state.Event != "" && req.Event != state.Event {
 				log.Printf("control :: event mismatch job=%s request=%s stored=%s", req.JobID, req.Event, state.Event)
 			}
-			if state.Status == support.ProcessStatusTerminated {
-				return support.ProcessStatusFailed, state.Event
-			}
 			return state.Status, state.Event
 		} else {
 			// Store healthy + row absent means NOT_FOUND (do not resurrect expired final state).

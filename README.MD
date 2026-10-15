@@ -649,8 +649,10 @@ process so it can still answer after a restart.
 - **Response topic**: `<request_id>.control_response`, e.g.
 
 ```json
-{ "request_id": "<uuid v7>", "job_id": "<job_record.uuid>", "identity_id": "<identity_id>", "status": "RUNNING|FINISHED|FAILED|NOT_FOUND", "event": "<event name>" }
+{ "request_id": "<uuid v7>", "job_id": "<job_record.uuid>", "identity_id": "<identity_id>", "status": "RUNNING|FINISHED|FAILED|TERMINATED|NOT_FOUND", "event": "<event name>" }
 ```
+
+A terminated process is reported as `TERMINATED` by the worker/API; the Job Manager persists it as `TERMINATE` in `job_record.status`. This naming asymmetry is intentional, and `_finish` remains `"terminate"`.
 
 Malformed payloads are ignored and never crash the worker. The lookup order is: SQLite store →
 in-memory registry fallback → `NOT_FOUND`.
@@ -662,7 +664,7 @@ State is persisted to a per-instance SQLite database (see `support/ProcessStateS
 - **Default path**: `<working dir>/.job_item_data/state.db`. One database per instance; no sharing
   between instances on the same host.
 - **Path precedence**: env `JOB_ITEM_DATA_DIR` > YAML `data_dir` > explicit `Init` argument > default.
-- **Table** `process_state`: `job_id`, `event`, `status` (`RUNNING`/`FINISHED`/`FAILED`),
+- **Table** `process_state`: `job_id`, `event`, `status` (`RUNNING`/`FINISHED`/`FAILED`/`TERMINATED`),
   `started_at`, `updated_at`, `finished_at`, `exit_code`, `last_log_at`, `last_error`.
 - **SQLite mode**: WAL, `busy_timeout` 5s, `synchronous=NORMAL`, single-writer (one connection).
 - **Driver**: `modernc.org/sqlite` (CGO-free) so `build.sh` keeps working with `CGO_ENABLED=0`.

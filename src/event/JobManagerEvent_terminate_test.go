@@ -77,8 +77,8 @@ func TestWatchProcessCMD_TerminateKillsTreeAndKeepsStatus(t *testing.T) {
 	if got.Status != support.ProcessStatusTerminated {
 		t.Fatalf("expected store TERMINATED, got %+v", got)
 	}
-	// Kontrak check_status Fase 1 tetap kompatibel: TERMINATED dipetakan ke FAILED (SPEC D-7).
-	if status, _ := lookupJobStatus(ControlRequest{Action: ControlActionCheckStatus, RequestID: "req-1", JobID: taskID, Event: "test.term"}); status != support.ProcessStatusFailed {
-		t.Fatalf("expected control response FAILED for TERMINATED, got %q", status)
+	// Kontrak check_status Fase 2a meneruskan TERMINATED apa adanya.
+	if status, _ := lookupJobStatus(ControlRequest{Action: ControlActionCheckStatus, RequestID: "req-1", JobID: taskID, Event: "test.term"}); status != support.ProcessStatusTerminated {
+		t.Fatalf("expected control response TERMINATED, got %q", status)
 	}
 }
