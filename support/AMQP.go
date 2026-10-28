@@ -90,9 +90,29 @@ func (c *AMQPSupport) dialAMQP(url string) (*amqp.Connection, error) {
 	if err != nil {
 		return nil, err
 	}
-	config := amqp.Config{Dial: amqp.DefaultDial(10 * time.Second)}
-	config.TLSClientConfig = tlsConfig
-	return amqp.DialConfig(url, config)
+	return amqp.DialConfig(url, buildAMQPConfig(tlsConfig))
+}
+
+// Values mirror amqp091-go's unexported defaults (connection.go) so that using
+// DialConfig keeps the same tuning as the previous DialTLS/Dial calls.
+const (
+	defaultAMQPHeartbeat   = 10 * time.Second
+	defaultAMQPLocale      = "en_US"
+	defaultAMQPDialTimeout = 10 * time.Second
+)
+
+// buildAMQPConfig builds the AMQP client config.
+// Heartbeat and Locale are set explicitly because amqp091-go only applies its
+// defaults inside Dial/DialTLS/DialConfig when the config is zero-valued.
+// Leaving Heartbeat at 0 makes the server interval win (RabbitMQ default 60s),
+// which delays dead-connection detection by ~3x.
+func buildAMQPConfig(tlsConfig *tls.Config) amqp.Config {
+	return amqp.Config{
+		Dial:            amqp.DefaultDial(defaultAMQPDialTimeout),
+		Heartbeat:       defaultAMQPHeartbeat,
+		Locale:          defaultAMQPLocale,
+		TLSClientConfig: tlsConfig,
+	}
 }
 
 // buildTLSConfig builds the TLS configuration for a secure AMQP connection.

@@ -4,6 +4,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -128,5 +129,33 @@ func TestBuildTLSConfig_ClientCertOnlyWhenBothProvided(t *testing.T) {
 	}
 	if len(tlsConfig.Certificates) != 0 {
 		t.Fatal("expected no client certificate when key_file is missing")
+	}
+}
+
+// R-6: DialConfig does not apply amqp091-go's unexported defaults, so the
+// client heartbeat must be set explicitly or the server interval (60s) wins.
+func TestBuildAMQPConfig_SetsHeartbeatAndLocale(t *testing.T) {
+	config := buildAMQPConfig(nil)
+
+	if config.Heartbeat != 10*time.Second {
+		t.Fatalf("Heartbeat = %s, want 10s", config.Heartbeat)
+	}
+	if config.Locale != "en_US" {
+		t.Fatalf("Locale = %q, want %q", config.Locale, "en_US")
+	}
+	if config.Dial == nil {
+		t.Fatal("expected Dial to be set so connects have a timeout")
+	}
+}
+
+func TestBuildAMQPConfig_PassesTLSConfig(t *testing.T) {
+	tlsConfig := &tls.Config{ServerName: "broker.example"}
+	config := buildAMQPConfig(tlsConfig)
+
+	if config.TLSClientConfig != tlsConfig {
+		t.Fatal("expected TLSClientConfig to be passed through")
+	}
+	if config.Heartbeat != 10*time.Second || config.Locale != "en_US" {
+		t.Fatal("heartbeat/locale must be set regardless of TLS config")
 	}
 }
