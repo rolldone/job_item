@@ -32,8 +32,12 @@ func (c *MsgNotifController) AddNotif(ctx *gin.Context) {
 		return
 	}
 
-	currentConnection := support.Helper.ConfigYaml.ConfigData.Broker_connection
-	conn := support.Helper.BrokerConnection.GetConnection(currentConnection["key"].(string))
+	brokerKey, err := support.Helper.ConfigYaml.GetBrokerConnectionKey()
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "invalid broker connection config: " + err.Error()})
+		return
+	}
+	conn := support.Helper.BrokerConnection.GetConnection(brokerKey)
 	if conn == nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get broker connection"})
 		return

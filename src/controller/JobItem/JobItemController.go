@@ -22,7 +22,12 @@ func CreateJobHandler(c *gin.Context) {
 		return
 	}
 
-	conn := support.Helper.BrokerConnection.GetConnection(support.Helper.ConfigYaml.ConfigData.Broker_connection["key"].(string))
+	brokerKey, err := support.Helper.ConfigYaml.GetBrokerConnectionKey()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "invalid broker connection config: " + err.Error()})
+		return
+	}
+	conn := support.Helper.BrokerConnection.GetConnection(brokerKey)
 	if conn == nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "failed to get broker connection"})
 		return

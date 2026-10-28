@@ -36,11 +36,24 @@ func (c *BrokerConnectionSupport) RegisterConnection(key string, conn BrokerConn
 }
 
 func (c *BrokerConnectionSupport) GetConnection(key string) BrokerConnectionInterface {
+	if key == "" {
+		Helper.PrintErrName("GetConnection called with empty key", "ERR-BROKER-EMPTY-KEY")
+		return nil
+	}
 	for _, v := range c.conn_arr {
-		if (*v).GetKey_P() == key {
-			Helper.PrintGroupName("GetConnection :: " + (*v).GetKey_P() + " == " + key)
-			return (*v).GetBroker_P().(BrokerConnectionInterface)
+		if v == nil || *v == nil {
+			continue
 		}
+		if (*v).GetKey_P() != key {
+			continue
+		}
+		Helper.PrintGroupName("GetConnection :: " + (*v).GetKey_P() + " == " + key)
+		broker, ok := (*v).GetBroker_P().(BrokerConnectionInterface)
+		if !ok || broker == nil {
+			Helper.PrintErrName("GetConnection :: broker for key "+key+" has unexpected type or is nil", "ERR-BROKER-ASSERT")
+			return nil
+		}
+		return broker
 	}
 	return nil
 }

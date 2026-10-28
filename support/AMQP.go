@@ -47,26 +47,6 @@ func (c *AMQPSupport) ConnectPubSub() (*amqp.Connection, error) {
 	amqpUser := c.amqpConfInfo.User
 	amqpPassword := c.amqpConfInfo.Password
 
-	var tlsConfig *tls.Config
-	if c.amqpConfInfo.Secure {
-		if c.amqpConfInfo.CAFile != "" {
-			caCert, err := os.ReadFile(c.amqpConfInfo.CAFile)
-			if err != nil {
-				return nil, err
-			}
-			caCertPool := x509.NewCertPool()
-			caCertPool.AppendCertsFromPEM(caCert)
-			tlsConfig = &tls.Config{RootCAs: caCertPool}
-			if c.amqpConfInfo.CertFile != "" && c.amqpConfInfo.KeyFile != "" {
-				cert, err := tls.LoadX509KeyPair(c.amqpConfInfo.CertFile, c.amqpConfInfo.KeyFile)
-				if err != nil {
-					return nil, err
-				}
-				tlsConfig.Certificates = []tls.Certificate{cert}
-			}
-		}
-	}
-
 	// Create AMQP URI
 	url := "amqp://" + amqpUser + ":" + amqpPassword + "@" + amqpHost + ":" + strconv.Itoa(amqpPort) + "/"
 	if c.amqpConfInfo.Secure {
@@ -74,46 +54,39 @@ func (c *AMQPSupport) ConnectPubSub() (*amqp.Connection, error) {
 	}
 	fmt.Println("AMQP Connection inf :: ", url)
 
-	// Retry mechanism
-	var err error
-	for {
-		var nc *amqp.Connection
-		if c.amqpConfInfo.Secure {
-			nc, err = amqp.DialTLS(url, tlsConfig)
-		} else {
-			nc, err = amqp.Dial(url)
-		}
-		if err == nil {
-			c.nc = nc
-
-			// Set up connection monitoring
-			go func() {
-				notifyClose := nc.NotifyClose(make(chan *amqp.Error))
-				for err := range notifyClose {
-					if err != nil {
-						fmt.Println("Disconnected from AMQP server, attempting to reconnect:", err)
-						go c.retryConnection(url) // Trigger reconnection loop
-					}
-				}
-			}()
-
-			// Create a channel
-			ch, chErr := nc.Channel()
-			if chErr != nil {
-				fmt.Println("Failed to open a channel:", chErr)
-				return nil, chErr
-			}
-			c.ch = ch
-			break
-		}
-		fmt.Println("AMQP connection failed, retrying in 5-10 seconds:", err.Error())
-		time.Sleep(5 * time.Second) // Delay before retrying
+	// Perform a single connection attempt. Startup retries are bounded by the
+	// caller (initBrokerConnections / tryRestartProcess) so the worker can never
+	// hang forever when the broker is unreachable.
+	nc, err := c.dialAMQP(url)
+	if err != nil {
+		return nil, fmt.Errorf("AMQP connection to %s failed: %w", url, err)
 	}
+	c.nc = nc
 
-	return c.nc, err
+	// Set up connection monitoring
+	go func() {
+		notifyClose := nc.NotifyClose(make(chan *amqp.Error))
+		for err := range notifyClose {
+			if err != nil {
+				fmt.Println("Disconnected from AMQP server, attempting to reconnect:", err)
+				go c.retryConnection(url) // Trigger reconnection loop
+			}
+		}
+	}()
+
+	// Create a channel
+	ch, chErr := nc.Channel()
+	if chErr != nil {
+		fmt.Println("Failed to open a channel:", chErr)
+		return nil, chErr
+	}
+	c.ch = ch
+
+	return c.nc, nil
 }
 
 func (c *AMQPSupport) dialAMQP(url string) (*amqp.Connection, error) {
+	config := amqp.Config{Dial: amqp.DefaultDial(10 * time.Second)}
 	if c.amqpConfInfo.Secure {
 		caCert, err := os.ReadFile(c.amqpConfInfo.CAFile)
 		if err != nil {
@@ -129,9 +102,9 @@ func (c *AMQPSupport) dialAMQP(url string) (*amqp.Connection, error) {
 			}
 			tlsConfig.Certificates = []tls.Certificate{cert}
 		}
-		return amqp.DialTLS(url, tlsConfig)
+		config.TLSClientConfig = tlsConfig
 	}
-	return amqp.Dial(url)
+	return amqp.DialConfig(url, config)
 }
 
 func (c *AMQPSupport) retryConnection(url string) {

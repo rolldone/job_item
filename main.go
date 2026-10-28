@@ -172,7 +172,7 @@ func main() {
 			err := initMain(configYamlSupport, configYamlSupport.Config_path)
 			if err != nil {
 				support.Helper.PrintErrName("Error initializing config yaml support: "+err.Error(), "ERR-30350903201")
-				panic(1)
+				os.Exit(1)
 			}
 
 			cmd, err = configYamlSupport.RunChildProcess()
@@ -194,37 +194,101 @@ func main() {
 	}
 }
 
-func tryRestartProcess(waitingRecursive int, callback func() bool) {
-	retryConn := true
-	for retryConn {
-		retryConn = callback()
-		if !retryConn {
+const (
+	// defaultBrokerConnectMaxAttempts bounds broker connection retries so the
+	// worker can never hang forever when the broker is unreachable.
+	defaultBrokerConnectMaxAttempts = 20
+	// defaultBrokerConnectBackoff is the delay between broker connection attempts.
+	defaultBrokerConnectBackoff = 5 * time.Second
+)
+
+// brokerConnectMaxAttempts reads JOB_ITEM_BROKER_CONNECT_MAX_ATTEMPTS.
+// Invalid or non-positive values fall back to defaultBrokerConnectMaxAttempts.
+func brokerConnectMaxAttempts() int {
+	raw := os.Getenv("JOB_ITEM_BROKER_CONNECT_MAX_ATTEMPTS")
+	if raw == "" {
+		return defaultBrokerConnectMaxAttempts
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		support.Helper.PrintErrName(
+			fmt.Sprintf("Invalid JOB_ITEM_BROKER_CONNECT_MAX_ATTEMPTS=%q, falling back to %d", raw, defaultBrokerConnectMaxAttempts),
+			"ERR-BROKER-ENV-ATTEMPTS")
+		return defaultBrokerConnectMaxAttempts
+	}
+	return value
+}
+
+// brokerConnectBackoff reads JOB_ITEM_BROKER_CONNECT_BACKOFF_SECONDS.
+// Invalid or non-positive values fall back to defaultBrokerConnectBackoff.
+func brokerConnectBackoff() time.Duration {
+	raw := os.Getenv("JOB_ITEM_BROKER_CONNECT_BACKOFF_SECONDS")
+	if raw == "" {
+		return defaultBrokerConnectBackoff
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		support.Helper.PrintErrName(
+			fmt.Sprintf("Invalid JOB_ITEM_BROKER_CONNECT_BACKOFF_SECONDS=%q, falling back to %s", raw, defaultBrokerConnectBackoff),
+			"ERR-BROKER-ENV-BACKOFF")
+		return defaultBrokerConnectBackoff
+	}
+	return time.Duration(value) * time.Second
+}
+
+func brokerIdentityID(configYamlSupport *support.ConfigYamlSupport) string {
+	if identityID := os.Getenv("JOB_ITEM_IDENTITY_ID"); identityID != "" {
+		return identityID
+	}
+	return configYamlSupport.ConfigData.Identity_id
+}
+
+// tryRestartProcess retries callback until it succeeds or maxAttempts is reached.
+// A nil error means the connection is established. When attempts are exhausted,
+// the returned error explains what failed so the caller can exit with a clear log.
+func tryRestartProcess(brokerKey string, brokerType string, identityID string, maxAttempts int, backoff time.Duration, callback func() error) error {
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		lastErr = callback()
+		if lastErr == nil {
+			support.Helper.PrintGroupName(fmt.Sprintf(
+				"Broker connected on attempt %d/%d (broker_key=%q broker_type=%q identity_id=%q)",
+				attempt, maxAttempts, brokerKey, brokerType, identityID))
+			return nil
+		}
+		if attempt == maxAttempts {
 			break
 		}
-		support.Helper.PrintGroupName("Try restart connection in 5 seconds")
-		time.Sleep(time.Duration(time.Second) * time.Duration(waitingRecursive))
+		support.Helper.PrintErrName(fmt.Sprintf(
+			"Broker connect attempt %d/%d failed (broker_key=%q broker_type=%q identity_id=%q): %v; retrying in %s",
+			attempt, maxAttempts, brokerKey, brokerType, identityID, lastErr, backoff), "ERR-BROKER-RETRY")
+		time.Sleep(backoff)
 	}
+	return fmt.Errorf("giving up broker connection after %d attempts (broker_key=%q broker_type=%q identity_id=%q): %w", maxAttempts, brokerKey, brokerType, identityID, lastErr)
 }
 
 func initializeConfigYamlSupport(configYamlSupport *support.ConfigYamlSupport, config string) error {
-	var err error
 	totalCountRequest := 3
-	for range totalCountRequest {
+	var lastErr error
+	for attempt := 1; attempt <= totalCountRequest; attempt++ {
 		confItem, err := support.ConfigYamlSupportContruct(support.ConfigYamlSupportConstructPropsType{
 			Config_path: config,
 		})
 		if err != nil {
-			support.Helper.PrintErrName("Error initializing config yaml support: "+err.Error(), "ERR-3030903200")
-			time.Sleep(time.Duration(time.Second) * 3)
-			support.Helper.PrintGroupName("Retry connection")
-
+			lastErr = err
+			support.Helper.PrintErrName(
+				fmt.Sprintf("Error initializing config yaml support (attempt %d/%d): %v", attempt, totalCountRequest, err),
+				"ERR-3030903200")
+			if attempt < totalCountRequest {
+				time.Sleep(time.Duration(time.Second) * 3)
+				support.Helper.PrintGroupName("Retry connection")
+			}
 			continue
 		}
 		*configYamlSupport = *confItem
-		err = nil
-		break
+		return nil
 	}
-	return err
+	return lastErr
 }
 
 func initMain(configYamlSupport *support.ConfigYamlSupport, config string) error {
@@ -245,11 +309,21 @@ func initMain(configYamlSupport *support.ConfigYamlSupport, config string) error
 	// Initialize broker connection support
 	// This will init the broker connection support
 	// and register the connection to the broker connection support
-	brokerConnectionSupport := initBrokerConnections(configYamlSupport)
+	brokerConnectionSupport, err := initBrokerConnections(configYamlSupport)
+	if err != nil {
+		return err
+	}
 	supportSupport.Register(brokerConnectionSupport)
 
 	// Listen signal shutdown from child and child exec process
-	conn := brokerConnectionSupport.GetConnection(configYamlSupport.ConfigData.Broker_connection["key"].(string))
+	brokerKey, err := configYamlSupport.GetBrokerConnectionKey()
+	if err != nil {
+		return err
+	}
+	conn := brokerConnectionSupport.GetConnection(brokerKey)
+	if conn == nil {
+		return fmt.Errorf("no broker connection registered for key %q", brokerKey)
+	}
 	configYamlSupport.ListenForShutdownFromConn(conn)
 
 	// Register gin support
@@ -284,7 +358,10 @@ func initCli() bool {
 		// Example job_item --config=/var/www/html/config.yaml
 		Action: func(ctx *cli.Context) error {
 			var configYamlSupport support.ConfigYamlSupport
-			initMain(&configYamlSupport, ctx.String("config"))
+			if err := initMain(&configYamlSupport, ctx.String("config")); err != nil {
+				support.Helper.PrintErrName("Worker startup failed: "+err.Error(), "ERR-30350903209")
+				return err
+			}
 			return nil
 		},
 
@@ -458,37 +535,49 @@ func initCli() bool {
 					// Initialize broker connection support
 					// This will init the broker connection support
 					// and register the connection to the broker connection support
-					brokerConnectionSupport := initBrokerConnections(&configYamlSupport)
+					brokerConnectionSupport, err := initBrokerConnections(&configYamlSupport)
+					if err != nil {
+						support.Helper.PrintErrName("Error initializing broker connection: "+err.Error(), "ERR-30350906202")
+						return err
+					}
 					supportSupport.Register(brokerConnectionSupport)
 
 					// Check the own event have regsiter to job manager event
 					jobManagerEvent := event.JobManagerEventConstruct()
 					postOwnInfoEvent := event.ListenOwnHardwareInfoEvent{}
 					brokCon := configYamlSupport.ConfigData.Broker_connection
-					switch brokCon["type"].(string) {
+					brokerType, err := support.GetConfigString(brokCon, "type")
+					if err != nil {
+						return err
+					}
+					brokerKey, err := configYamlSupport.GetBrokerConnectionKey()
+					if err != nil {
+						return err
+					}
+					switch brokerType {
 					case "nats":
 						// Init nats broker.
-						jobManagerEvent.ListenEvent(brokCon["key"].(string))
+						jobManagerEvent.ListenEvent(brokerKey)
 						if support.Helper.ConfigYaml.ConfigData.End_point != "" {
-							postOwnInfoEvent.ListenInfoHardware(brokCon["key"].(string))
-							postOwnInfoEvent.ListenInfoNetwork(brokCon["key"].(string))
-							postOwnInfoEvent.ListenInfoUsage(brokCon["key"].(string))
+							postOwnInfoEvent.ListenInfoHardware(brokerKey)
+							postOwnInfoEvent.ListenInfoNetwork(brokerKey)
+							postOwnInfoEvent.ListenInfoUsage(brokerKey)
 						}
 					case "rabbitmq":
 						// Init rabbitmq broker.
-						jobManagerEvent.ListenEvent(brokCon["key"].(string))
+						jobManagerEvent.ListenEvent(brokerKey)
 						if support.Helper.ConfigYaml.ConfigData.End_point != "" {
-							postOwnInfoEvent.ListenInfoHardware(brokCon["key"].(string))
-							postOwnInfoEvent.ListenInfoNetwork(brokCon["key"].(string))
-							postOwnInfoEvent.ListenInfoUsage(brokCon["key"].(string))
+							postOwnInfoEvent.ListenInfoHardware(brokerKey)
+							postOwnInfoEvent.ListenInfoNetwork(brokerKey)
+							postOwnInfoEvent.ListenInfoUsage(brokerKey)
 						}
 					case "redis":
 						// Init redis broker.
-						jobManagerEvent.ListenEvent(brokCon["key"].(string))
+						jobManagerEvent.ListenEvent(brokerKey)
 						if support.Helper.ConfigYaml.ConfigData.End_point != "" {
-							postOwnInfoEvent.ListenInfoHardware(brokCon["key"].(string))
-							postOwnInfoEvent.ListenInfoNetwork(brokCon["key"].(string))
-							postOwnInfoEvent.ListenInfoUsage(brokCon["key"].(string))
+							postOwnInfoEvent.ListenInfoHardware(brokerKey)
+							postOwnInfoEvent.ListenInfoNetwork(brokerKey)
+							postOwnInfoEvent.ListenInfoUsage(brokerKey)
 						}
 					}
 
@@ -549,7 +638,11 @@ func initCli() bool {
 					// Initialize broker connection support
 					// This will init the broker connection support
 					// and register the connection to the broker connection support
-					brokerConnectionSupport := initBrokerConnections(&configYamlSupport)
+					brokerConnectionSupport, err := initBrokerConnections(&configYamlSupport)
+					if err != nil {
+						support.Helper.PrintErrName("Error initializing broker connection: "+err.Error(), "ERR-3035090233203")
+						return err
+					}
 					supportSupport.Register(brokerConnectionSupport)
 
 					var cmdExecArr []*exec.Cmd
@@ -753,75 +846,76 @@ func ginInitialize(router *gin.Engine) {
 	}
 }
 
-func initBrokerConnections(configYamlSupport *support.ConfigYamlSupport) *support.BrokerConnectionSupport {
+func initBrokerConnections(configYamlSupport *support.ConfigYamlSupport) (*support.BrokerConnectionSupport, error) {
 	brokerConnectionSupport := support.BrokerConnectionSupportContruct()
 	currentConnection := configYamlSupport.ConfigData.Broker_connection
 
 	// Check if broker connection is properly configured
 	if currentConnection == nil {
-		fmt.Println("\n❌ Connection Refuse :")
-		fmt.Println("Please check the job manager server connection")
-		os.Exit(1)
+		return nil, fmt.Errorf("broker connection config is missing; please check the job manager server connection")
 	}
 
-	// Check if broker type is specified
-	brokerType, ok := currentConnection["type"]
-	if !ok || brokerType == nil {
-		fmt.Println("\n❌ Configuration Error:")
-		fmt.Println("Broker connection type is not specified")
-		fmt.Println("Please configure the broker type (nats, rabbitmq, or redis) in the Job Manager")
-		os.Exit(1)
+	// Check if broker type is specified and is a non-empty string
+	brokerType, err := support.GetConfigString(currentConnection, "type")
+	if err != nil {
+		return nil, fmt.Errorf("broker connection type is invalid: %w; please configure the broker type (nats, rabbitmq, or redis) in the Job Manager", err)
 	}
 
-	// Check if broker key is specified
-	brokerKey, ok := currentConnection["key"]
-	if !ok || brokerKey == nil {
-		fmt.Println("\n❌ Configuration Error:")
-		fmt.Println("Broker connection key is not specified")
-		fmt.Println("Please configure the broker connection key in the Job Manager")
-		os.Exit(1)
+	// Check if broker key is specified and is a non-empty string
+	brokerKey, err := configYamlSupport.GetBrokerConnectionKey()
+	if err != nil {
+		return nil, fmt.Errorf("broker connection key is invalid: %w; please configure the broker connection key in the Job Manager", err)
 	}
 
-	switch brokerType.(string) {
+	maxAttempts := brokerConnectMaxAttempts()
+	backoff := brokerConnectBackoff()
+	identityID := brokerIdentityID(configYamlSupport)
+
+	brokerCon, err := configYamlSupport.GetTypeBrokerCon(currentConnection)
+	if err != nil {
+		return nil, fmt.Errorf("invalid broker connection config: %w", err)
+	}
+
+	var connectErr error
+	switch brokerType {
 	case "nats":
-		natsBrokerCon := configYamlSupport.GetNatsBrokerCon(configYamlSupport.GetTypeBrokerCon(currentConnection))
-		tryRestartProcess(5, func() bool {
+		natsBrokerCon := configYamlSupport.GetNatsBrokerCon(brokerCon)
+		connectErr = tryRestartProcess(brokerKey, brokerType, identityID, maxAttempts, backoff, func() error {
 			natSupport, err := support.NatsSupportConstruct(natsBrokerCon)
 			if err != nil {
-				return true
+				return err
 			}
 			var gg *support.NatsSupport = &natSupport
-			brokerConnectionSupport.RegisterConnection(brokerKey.(string), gg)
-			return false
+			brokerConnectionSupport.RegisterConnection(brokerKey, gg)
+			return nil
 		})
 	case "rabbitmq":
-		amqpBrokerCon := configYamlSupport.GetRabbitMQBrokenCon(configYamlSupport.GetTypeBrokerCon(currentConnection))
-		tryRestartProcess(5, func() bool {
+		amqpBrokerCon := configYamlSupport.GetRabbitMQBrokenCon(brokerCon)
+		connectErr = tryRestartProcess(brokerKey, brokerType, identityID, maxAttempts, backoff, func() error {
 			amqpSupport, err := support.AMQPSupportConstruct(amqpBrokerCon)
 			if err != nil {
-				return true
+				return err
 			}
 			var gg *support.AMQPSupport = amqpSupport
-			brokerConnectionSupport.RegisterConnection(brokerKey.(string), gg)
-			return false
+			brokerConnectionSupport.RegisterConnection(brokerKey, gg)
+			return nil
 		})
 	case "redis":
-		redisBrokerCon := configYamlSupport.GetRedisBrokerCon(configYamlSupport.GetTypeBrokerCon(currentConnection))
-		tryRestartProcess(5, func() bool {
+		redisBrokerCon := configYamlSupport.GetRedisBrokerCon(brokerCon)
+		connectErr = tryRestartProcess(brokerKey, brokerType, identityID, maxAttempts, backoff, func() error {
 			redisSupport, err := support.NewRedisSupportConstruct(redisBrokerCon)
 			if err != nil {
-				return true
+				return err
 			}
 			var gg *support.RedisSupport = redisSupport
-			brokerConnectionSupport.RegisterConnection(brokerKey.(string), gg)
-			return false
+			brokerConnectionSupport.RegisterConnection(brokerKey, gg)
+			return nil
 		})
 	default:
-		fmt.Println("\n❌ Configuration Error:")
-		fmt.Printf("Unsupported broker type: %v\n", brokerType)
-		fmt.Println("Supported broker types: nats, rabbitmq, redis")
-		fmt.Println("Please select a valid broker connection in the Job Manager")
-		os.Exit(1)
+		return nil, fmt.Errorf("unsupported broker type %q (supported: nats, rabbitmq, redis); please select a valid broker connection in the Job Manager", brokerType)
 	}
-	return brokerConnectionSupport
+	if connectErr != nil {
+		return nil, connectErr
+	}
+	return brokerConnectionSupport, nil
 }

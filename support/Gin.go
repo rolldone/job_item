@@ -102,14 +102,15 @@ func (g *GinSupport) StartBaseRoute() {
 		// Create a TCP listener on port 0 (random free port)
 		listener, err := net.Listen("tcp", ":0") // Bind to localhost only
 		if err != nil {
-			panic(err)
+			Helper.PrintErrName("Gin :: failed to create listener: "+err.Error(), "ERR-GIN-LISTEN")
+			return
 		}
 		// Get and store the actual port in GinSupport struct
 		g.Port = listener.Addr().(*net.TCPAddr).Port
 
 		// Start Gin using the listener
 		if err := g.Router.RunListener(listener); err != nil {
-			panic(err)
+			Helper.PrintErrName("Gin :: failed to run listener: "+err.Error(), "ERR-GIN-RUN")
 		}
 	}()
 }

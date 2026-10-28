@@ -19,7 +19,6 @@ import (
 	"job_item/src/helper"
 	support_helper "job_item/support/helper"
 	"job_item/support/model"
-	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -153,8 +152,7 @@ func ConfigYamlSupportContruct(props ConfigYamlSupportConstructPropsType) (*Conf
 
 	stat, err := os.Stat(filepath.Dir(props.Config_path))
 	if err != nil {
-		gg.printGroupName("Error getting directory stat: " + err.Error())
-		panic(1)
+		return nil, fmt.Errorf("error getting config directory stat: %w", err)
 	}
 	if stat.IsDir() {
 		gg.printGroupName("Set working dir :: " + filepath.Dir(props.Config_path))
@@ -164,11 +162,12 @@ func ConfigYamlSupportContruct(props ConfigYamlSupportConstructPropsType) (*Conf
 
 	err = os.Chdir(filepath.Dir(props.Config_path))
 	if err != nil {
-		gg.printGroupName("Error chdir :: " + err.Error())
-		panic(1)
+		return nil, fmt.Errorf("error changing working dir to %q: %w", filepath.Dir(props.Config_path), err)
 	}
 
-	gg.LoadConfigYaml()
+	if err := gg.LoadConfigYaml(); err != nil {
+		return nil, err
+	}
 	gg.useEnvToYamlValue()
 	if gg.ConfigData.End_point != "" {
 		err = gg.loadServerCOnfig()
@@ -194,12 +193,11 @@ type ConfigYamlSupport struct {
 }
 
 // LoadConfigYaml loads the configuration from a YAML file.
-// It panics if the file cannot be read or parsed.
-func (c *ConfigYamlSupport) LoadConfigYaml() {
+// It returns an error when the file cannot be read or parsed.
+func (c *ConfigYamlSupport) LoadConfigYaml() error {
 	yamlFile, err := os.ReadFile(c.Config_path)
 	if err != nil {
-		fmt.Println("Problem open file config.yaml ", err)
-		panic(1)
+		return fmt.Errorf("problem opening config file %q: %w", c.Config_path, err)
 	}
 	c.ConfigData = ConfigData{}
 
@@ -208,8 +206,7 @@ func (c *ConfigYamlSupport) LoadConfigYaml() {
 	if identityId == "" {
 		idenityIdNew, err := support_helper.GenerateUUIDv7()
 		if err != nil {
-			fmt.Println("Failed to generate UUID:", err)
-			panic(1)
+			return fmt.Errorf("failed to generate identity UUID: %w", err)
 		}
 		identityId = idenityIdNew
 	}
@@ -217,8 +214,9 @@ func (c *ConfigYamlSupport) LoadConfigYaml() {
 
 	err = yaml.Unmarshal(yamlFile, &c.ConfigData)
 	if err != nil {
-		log.Fatalf("Unmarshal: %v", err)
+		return fmt.Errorf("failed to parse config file %q: %w", c.Config_path, err)
 	}
+	return nil
 }
 
 // useEnvToYamlValue updates the configuration values using environment variables.
@@ -287,8 +285,7 @@ func (c *ConfigYamlSupport) loadServerCOnfig() error {
 		var configData ConfigData
 		err := json.Unmarshal([]byte(configDataString), &configData)
 		if err != nil {
-			c.printGroupName("Error unmarshalling JOB_ITEM_CONFIG_DATA: " + err.Error())
-			panic(1)
+			return fmt.Errorf("error unmarshalling JOB_ITEM_CONFIG_DATA: %w", err)
 		}
 		c.ConfigData = configData
 		c.printGroupName("Using JOB_ITEM_CONFIG_DATA from environment variable")
@@ -304,14 +301,12 @@ func (c *ConfigYamlSupport) loadServerCOnfig() error {
 
 	hostInfo, err := Helper.HardwareInfo.GetInfoHardware()
 	if err != nil {
-		c.printGroupName("Error getting hardware info: " + err.Error())
-		panic(1)
+		return fmt.Errorf("error getting hardware info: %w", err)
 	}
 	param["host"] = hostInfo
 	jsonDataParam, err := json.Marshal(param)
 	if err != nil {
-		c.printGroupName("Error marshalling JSON: " + err.Error())
-		panic(1)
+		return fmt.Errorf("error marshalling config request: %w", err)
 	}
 	var client = &http.Client{}
 	endpoint := fmt.Sprint(c.ConfigData.End_point, "/api/worker/config")
@@ -355,7 +350,7 @@ func (c *ConfigYamlSupport) loadServerCOnfig() error {
 	if err != nil {
 		c.printGroupName("ERROR: Failed to parse server response JSON :: " + err.Error())
 		c.printGroupName("This could mean the server returned invalid JSON format")
-		panic(1)
+		return fmt.Errorf("failed to parse server response JSON: %w", err)
 	}
 
 	c.printGroupName("Configuration successfully received from server")
@@ -541,37 +536,91 @@ func (c *ConfigYamlSupport) DownloadAndExtractCerts(endpoint, destDir, appID, ap
 	return nil
 }
 
+// GetConfigInt reads an integer value from a config map without panicking.
+// int, int64 and float64 values are accepted.
+func GetConfigInt(config map[string]interface{}, key string) (int, error) {
+	if config == nil {
+		return 0, fmt.Errorf("config is empty, cannot read %q", key)
+	}
+	raw, ok := config[key]
+	if !ok || raw == nil {
+		return 0, fmt.Errorf("config %q is not specified", key)
+	}
+	switch value := raw.(type) {
+	case int:
+		return value, nil
+	case int64:
+		return int(value), nil
+	case float64:
+		return int(value), nil
+	default:
+		return 0, fmt.Errorf("config %q has unexpected type %T (expected int)", key, raw)
+	}
+}
+
+// optionalConfigString reads an optional string value from a config map.
+// A missing or nil value returns an empty string without error.
+func optionalConfigString(config map[string]interface{}, key string) (string, error) {
+	if config == nil {
+		return "", nil
+	}
+	raw, ok := config[key]
+	if !ok || raw == nil {
+		return "", nil
+	}
+	value, ok := raw.(string)
+	if !ok {
+		return "", fmt.Errorf("config %q has unexpected type %T (expected string)", key, raw)
+	}
+	return value, nil
+}
+
 // GetTypeBrokerCon returns the appropriate broker connection type based on the provided configuration.
-func (c *ConfigYamlSupport) GetTypeBrokerCon(v map[string]interface{}) BrokerConInterface {
-	switch v["type"].(string) {
+// It returns an error instead of panicking when required values are missing or have the wrong type.
+func (c *ConfigYamlSupport) GetTypeBrokerCon(v map[string]interface{}) (BrokerConInterface, error) {
+	brokerType, err := GetConfigString(v, "type")
+	if err != nil {
+		return nil, err
+	}
+	host, err := GetConfigString(v, "host")
+	if err != nil {
+		return nil, err
+	}
+	key, err := GetConfigString(v, "key")
+	if err != nil {
+		return nil, err
+	}
+	name, err := GetConfigString(v, "name")
+	if err != nil {
+		return nil, err
+	}
+	port, err := GetConfigInt(v, "port")
+	if err != nil {
+		return nil, err
+	}
+
+	switch brokerType {
 	case "nats":
 		natsConf := NatsBrokerConnection{}
-		natsConf.Host = v["host"].(string)
-		natsConf.Key = v["key"].(string)
-		natsConf.Name = v["name"].(string)
-		switch port := v["port"].(type) {
-		case int:
-			natsConf.Port = port
-		case float64:
-			natsConf.Port = int(port)
-		default:
-			panic(fmt.Sprintf("unexpected type for port: %T", port))
+		natsConf.Host = host
+		natsConf.Key = key
+		natsConf.Name = name
+		natsConf.Port = port
+		natsConf.Type = brokerType
+		if natsConf.Auth_type, err = optionalConfigString(v, "auth_type"); err != nil {
+			return nil, err
 		}
-		natsConf.Type = v["type"].(string)
-		if v["auth_type"] != nil {
-			natsConf.Auth_type = v["auth_type"].(string)
-		} else {
-			fmt.Println("NATS ERR : You need define auth_type : [none | user_password | token], on job_manager")
-			panic(1)
+		if natsConf.Auth_type == "" {
+			return nil, fmt.Errorf("NATS configuration error: auth_type must be defined [none | user_password | token] in the Job Manager")
 		}
-		if v["user"] != nil {
-			natsConf.User = v["user"].(string)
+		if natsConf.User, err = optionalConfigString(v, "user"); err != nil {
+			return nil, err
 		}
-		if v["password"] != nil {
-			natsConf.Password = v["password"].(string)
+		if natsConf.Password, err = optionalConfigString(v, "password"); err != nil {
+			return nil, err
 		}
-		if v["token"] != nil {
-			natsConf.Token = v["token"].(string)
+		if natsConf.Token, err = optionalConfigString(v, "token"); err != nil {
+			return nil, err
 		}
 		// Parse TLS fields
 		if v["secure"] != nil {
@@ -584,41 +633,38 @@ func (c *ConfigYamlSupport) GetTypeBrokerCon(v map[string]interface{}) BrokerCon
 				natsConf.Secure = val == "true" || val == "1"
 			}
 		}
-		if v["ca_file"] != nil {
-			natsConf.CAFile = v["ca_file"].(string)
+		if natsConf.CAFile, err = optionalConfigString(v, "ca_file"); err != nil {
+			return nil, err
 		}
-		if v["cert_file"] != nil {
-			natsConf.CertFile = v["cert_file"].(string)
+		if natsConf.CertFile, err = optionalConfigString(v, "cert_file"); err != nil {
+			return nil, err
 		}
-		if v["key_file"] != nil {
-			natsConf.KeyFile = v["key_file"].(string)
+		if natsConf.KeyFile, err = optionalConfigString(v, "key_file"); err != nil {
+			return nil, err
 		}
 		if Helper.ConfigYaml.ConfigData.End_point != "" && natsConf.Secure && natsConf.CAFile != "" {
 			certDir := filepath.Dir(natsConf.CAFile)
 			endpoint := fmt.Sprintf("%s/api/worker/config/tls/download", c.ConfigData.End_point)
 			if err := c.DownloadAndExtractCerts(endpoint, certDir, c.ConfigData.Credential.Project_id, c.ConfigData.Credential.Secret_key); err != nil {
-				panic(err)
+				return nil, fmt.Errorf("NATS configuration error: failed to download TLS certificates: %w", err)
 			}
 		}
-		return natsConf
+		return natsConf, nil
 	case "rabbitmq":
 		rabbitmqConf := AMQP_BrokerConnection{}
-		rabbitmqConf.Host = v["host"].(string)
-		rabbitmqConf.Key = v["key"].(string)
-		rabbitmqConf.Name = v["name"].(string)
-		switch port := v["port"].(type) {
-		case int:
-			rabbitmqConf.Port = port
-		case float64:
-			rabbitmqConf.Port = int(port)
-		default:
-			panic(fmt.Sprintf("unexpected type for port: %T", port))
+		rabbitmqConf.Host = host
+		rabbitmqConf.Key = key
+		rabbitmqConf.Name = name
+		rabbitmqConf.Port = port
+		rabbitmqConf.Type = brokerType
+		if rabbitmqConf.User, err = optionalConfigString(v, "user"); err != nil {
+			return nil, err
 		}
-		rabbitmqConf.Type = v["type"].(string)
-		rabbitmqConf.User = v["user"].(string)
-		rabbitmqConf.Password = v["password"].(string)
-		if v["exchange"] != nil {
-			rabbitmqConf.Exchange = v["exchange"].(string)
+		if rabbitmqConf.Password, err = optionalConfigString(v, "password"); err != nil {
+			return nil, err
+		}
+		if rabbitmqConf.Exchange, err = optionalConfigString(v, "exchange"); err != nil {
+			return nil, err
 		}
 		// Parse TLS/mTLS fields
 		if v["secure"] != nil {
@@ -631,48 +677,38 @@ func (c *ConfigYamlSupport) GetTypeBrokerCon(v map[string]interface{}) BrokerCon
 				rabbitmqConf.Secure = val == "true" || val == "1"
 			}
 		}
-		if v["ca_file"] != nil {
-			rabbitmqConf.CAFile = v["ca_file"].(string)
+		if rabbitmqConf.CAFile, err = optionalConfigString(v, "ca_file"); err != nil {
+			return nil, err
 		}
-		if v["cert_file"] != nil {
-			rabbitmqConf.CertFile = v["cert_file"].(string)
+		if rabbitmqConf.CertFile, err = optionalConfigString(v, "cert_file"); err != nil {
+			return nil, err
 		}
-		if v["key_file"] != nil {
-			rabbitmqConf.KeyFile = v["key_file"].(string)
+		if rabbitmqConf.KeyFile, err = optionalConfigString(v, "key_file"); err != nil {
+			return nil, err
 		}
 		if Helper.ConfigYaml.ConfigData.End_point != "" && rabbitmqConf.Secure && rabbitmqConf.CAFile != "" {
 			certDir := filepath.Dir(rabbitmqConf.CAFile)
 			endpoint := fmt.Sprintf("%s/api/worker/config/tls/download", c.ConfigData.End_point)
 			if err := c.DownloadAndExtractCerts(endpoint, certDir, c.ConfigData.Credential.Project_id, c.ConfigData.Credential.Secret_key); err != nil {
-				panic(err)
+				return nil, fmt.Errorf("RabbitMQ configuration error: failed to download TLS certificates: %w", err)
 			}
 		}
-		return rabbitmqConf
+		return rabbitmqConf, nil
 	case "redis":
 		redisConf := RedisBrokerConnection{}
-		redisConf.Host = v["host"].(string)
-		redisConf.Key = v["key"].(string)
-		redisConf.Name = v["name"].(string)
-		switch port := v["port"].(type) {
-		case int:
-			redisConf.Port = port
-		case float64:
-			redisConf.Port = int(port)
-		default:
-			panic(fmt.Sprintf("unexpected type for port: %T", port))
+		redisConf.Host = host
+		redisConf.Key = key
+		redisConf.Name = name
+		redisConf.Port = port
+		redisConf.Type = brokerType
+		if redisConf.Password, err = optionalConfigString(v, "password"); err != nil {
+			return nil, err
 		}
-		redisConf.Type = v["type"].(string)
-		if v["password"] != nil {
-			redisConf.Password = v["password"].(string)
-		} else {
-			fmt.Println("REDIS ERR : You need define password")
-			panic(1)
+		if redisConf.Password == "" {
+			return nil, fmt.Errorf("REDIS configuration error: password must be defined in the Job Manager")
 		}
-		if v["db"] != nil {
-			redisConf.Db = int(v["db"].(float64))
-		} else {
-			fmt.Println("REDIS ERR : You need define db")
-			panic(1)
+		if redisConf.Db, err = GetConfigInt(v, "db"); err != nil {
+			return nil, fmt.Errorf("REDIS configuration error: %w", err)
 		}
 		// Parse TLS/mTLS fields
 		if v["secure"] != nil {
@@ -685,26 +721,26 @@ func (c *ConfigYamlSupport) GetTypeBrokerCon(v map[string]interface{}) BrokerCon
 				redisConf.Secure = val == "true" || val == "1"
 			}
 		}
-		if v["ca_file"] != nil {
-			redisConf.CAFile = v["ca_file"].(string)
+		if redisConf.CAFile, err = optionalConfigString(v, "ca_file"); err != nil {
+			return nil, err
 		}
-		if v["cert_file"] != nil {
-			redisConf.CertFile = v["cert_file"].(string)
+		if redisConf.CertFile, err = optionalConfigString(v, "cert_file"); err != nil {
+			return nil, err
 		}
-		if v["key_file"] != nil {
-			redisConf.KeyFile = v["key_file"].(string)
+		if redisConf.KeyFile, err = optionalConfigString(v, "key_file"); err != nil {
+			return nil, err
 		}
 		if Helper.ConfigYaml.ConfigData.End_point != "" && redisConf.Secure && redisConf.CAFile != "" {
 			certDir := filepath.Dir(redisConf.CAFile)
 			endpoint := fmt.Sprintf("%s/api/worker/config/tls/download", c.ConfigData.End_point)
 			if err := c.DownloadAndExtractCerts(endpoint, certDir, c.ConfigData.Credential.Project_id, c.ConfigData.Credential.Secret_key); err != nil {
-				panic(err)
+				return nil, fmt.Errorf("Redis configuration error: failed to download TLS certificates: %w", err)
 			}
 		}
-		return redisConf
+		return redisConf, nil
 	}
 
-	return nil
+	return nil, fmt.Errorf("unsupported broker type %q", brokerType)
 }
 
 // GetObject returns the ConfigYamlSupport object.
@@ -928,7 +964,36 @@ func (c *ConfigYamlSupport) RunExecsProcess(cmd *[]*exec.Cmd) {
 	}
 }
 
+// GetConfigString reads a string value from a config map without panicking.
+// It returns an error when the key is missing, nil, not a string, or empty.
+func GetConfigString(config map[string]interface{}, key string) (string, error) {
+	if config == nil {
+		return "", fmt.Errorf("config is empty, cannot read %q", key)
+	}
+	raw, ok := config[key]
+	if !ok || raw == nil {
+		return "", fmt.Errorf("config %q is not specified", key)
+	}
+	value, ok := raw.(string)
+	if !ok {
+		return "", fmt.Errorf("config %q has unexpected type %T (expected string)", key, raw)
+	}
+	if strings.TrimSpace(value) == "" {
+		return "", fmt.Errorf("config %q is empty", key)
+	}
+	return value, nil
+}
+
+// GetBrokerConnectionKey returns the broker connection key from the loaded config.
+func (c *ConfigYamlSupport) GetBrokerConnectionKey() (string, error) {
+	return GetConfigString(c.ConfigData.Broker_connection, "key")
+}
+
 func (c *ConfigYamlSupport) ListenForShutdownFromConn(conn BrokerConnectionInterface) {
+	if conn == nil {
+		Helper.PrintErrName("Skip listening shutdown signal: broker connection is nil", "ERR-SHUTDOWN-LISTEN-NIL")
+		return
+	}
 	identityId := os.Getenv("JOB_ITEM_IDENTITY_ID")
 	if identityId == "" {
 		identityId = c.ConfigData.Identity_id
@@ -947,7 +1012,12 @@ func (c *ConfigYamlSupport) ListenForShutdownFromConn(conn BrokerConnectionInter
 func (c *ConfigYamlSupport) ShutdownMainProcess() {
 	identityId := os.Getenv("JOB_ITEM_IDENTITY_ID")
 	fmt.Println("Shutting down main process with identity ID:", identityId)
-	conn := Helper.BrokerConnection.GetConnection(c.ConfigData.Broker_connection["key"].(string))
+	brokerKey, err := c.GetBrokerConnectionKey()
+	if err != nil {
+		Helper.PrintErrName("Cannot shutdown main process: "+err.Error(), "ERR-SHUTDOWN-BROKER-KEY")
+		return
+	}
+	conn := Helper.BrokerConnection.GetConnection(brokerKey)
 	if conn == nil {
 		fmt.Println("No broker connection available")
 		return

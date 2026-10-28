@@ -630,6 +630,23 @@ CMD ["./job_item"]
 - `WORKER_ID`: Override worker identity ID
 - `JOB_ITEM_DATA_DIR`: Override data directory for the process-state SQLite store (default `.job_item_data`)
 - `JOB_ITEM_STATE_RETENTION_HOURS`: Retention (hours) for final process-state rows before cleanup (default `24`)
+- `JOB_ITEM_BROKER_CONNECT_MAX_ATTEMPTS`: Maximum broker connection attempts during startup (default `20`; invalid/non-positive values fall back to the default)
+- `JOB_ITEM_BROKER_CONNECT_BACKOFF_SECONDS`: Delay in seconds between broker connection attempts (default `5`; invalid/non-positive values fall back to the default)
+
+#### Broker connection retry and failure markers
+
+Worker startup no longer retries the broker forever. When the broker is unreachable the worker:
+
+1. Logs each failed attempt with `ERR-BROKER-RETRY`, including `broker_key`, `broker_type`,
+   `identity_id`, attempt number, the underlying error, and the delay before the next attempt.
+2. After the configured attempts are exhausted, exits with a non-zero status and a
+   `giving up broker connection after N attempts ...` message.
+3. Never panics for recoverable configuration problems; invalid or missing broker config is
+   reported as a readable error instead.
+
+Use these markers to distinguish a worker that failed to connect from a normal job timeout:
+a worker that never connected logs `ERR-BROKER-RETRY` / `giving up broker connection`, while a
+job timeout only appears on the Job Manager side after the job has started.
 
 ## Status Check & Process State Store
 
