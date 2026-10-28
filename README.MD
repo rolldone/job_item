@@ -660,6 +660,11 @@ For AMQP with `secure: true`, `ca_file` is optional: when it is empty the client
 root CAs, when it is set it becomes the only root CA pool. `cert_file`/`key_file` are only used
 when both are provided.
 
+The AMQP client config is built explicitly (`buildAMQPConfig`) with `Heartbeat: 10s` and
+`Locale: en_US`, mirroring `DialTLS` defaults, because `DialConfig` does not apply the library's
+unexported defaults: leaving `Heartbeat` at 0 lets the server interval (RabbitMQ default 60s) win,
+which delays dead-connection detection by roughly 3x.
+
 ## Status Check & Process State Store
 
 The worker answers on-demand status checks from the Job Manager and keeps a local record of each
