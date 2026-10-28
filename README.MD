@@ -648,6 +648,18 @@ Use these markers to distinguish a worker that failed to connect from a normal j
 a worker that never connected logs `ERR-BROKER-RETRY` / `giving up broker connection`, while a
 job timeout only appears on the Job Manager side after the job has started.
 
+#### Residual: unbounded runtime reconnect
+
+Startup connection retries are bounded (above). Reconnects that happen **after** the initial
+connection succeeded are still unbounded by design: `AMQPSupport.retryConnection` and the NATS
+reconnect options keep retrying while the worker runs. That is the runtime path (broker restart,
+network blip), not the startup path, so the worker is never blocked from booting and the bounded
+startup policy above still applies.
+
+For AMQP with `secure: true`, `ca_file` is optional: when it is empty the client uses the system
+root CAs, when it is set it becomes the only root CA pool. `cert_file`/`key_file` are only used
+when both are provided.
+
 ## Status Check & Process State Store
 
 The worker answers on-demand status checks from the Job Manager and keeps a local record of each

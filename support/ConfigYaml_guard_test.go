@@ -76,10 +76,10 @@ func TestGetConfigInt(t *testing.T) {
 
 func TestGetBrokerConnectionKey_NoPanic(t *testing.T) {
 	tests := []struct {
-		name     string
-		config   map[string]interface{}
-		wantErr  bool
-		wantKey  string
+		name    string
+		config  map[string]interface{}
+		wantErr bool
+		wantKey string
 	}{
 		{name: "valid", config: map[string]interface{}{"key": "broker-key"}, wantKey: "broker-key"},
 		{name: "nil map", config: nil, wantErr: true},

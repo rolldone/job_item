@@ -55,44 +55,44 @@ func (c *NatsSupport) ConnectPubSub() error {
 	// Build connection options
 	var opts []nats.Option
 	opts = append(opts,
-                nats.Timeout(10*time.Second),
-                nats.MaxReconnects(-1),
-                nats.ReconnectWait(5*time.Second),
-                nats.ReconnectHandler(func(nc *nats.Conn) {
-                        fmt.Println("Reconnected to NATS server:", nc.ConnectedUrl())
-                }),
-                nats.DisconnectHandler(func(nc *nats.Conn) {
-                        fmt.Println("Disconnected from NATS server, attempting to reconnect...")
-                }),
-                nats.ClosedHandler(func(nc *nats.Conn) {
-                        fmt.Println("Connection to NATS server closed, attempting to reconnect...")
-                }),
-        )
-        // Add TLS option if Secure is true
-        if c.natConfInfo.Secure {
-                if c.natConfInfo.CAFile == "" {
-                        return fmt.Errorf("NATS TLS enabled but ca_file is missing in config")
-                }
-                opts = append(opts, nats.RootCAs(c.natConfInfo.CAFile))
-                fmt.Println("NATS TLS enabled. Using CA file:", c.natConfInfo.CAFile)
-        }
-        if c.natConfInfo.CertFile != "" && c.natConfInfo.KeyFile != "" {
-                opts = append(opts, nats.ClientCert(c.natConfInfo.CertFile, c.natConfInfo.KeyFile))
-                fmt.Println("NATS mTLS enabled. Using client cert and key:", c.natConfInfo.CertFile, c.natConfInfo.KeyFile)
-        }
+		nats.Timeout(10*time.Second),
+		nats.MaxReconnects(-1),
+		nats.ReconnectWait(5*time.Second),
+		nats.ReconnectHandler(func(nc *nats.Conn) {
+			fmt.Println("Reconnected to NATS server:", nc.ConnectedUrl())
+		}),
+		nats.DisconnectHandler(func(nc *nats.Conn) {
+			fmt.Println("Disconnected from NATS server, attempting to reconnect...")
+		}),
+		nats.ClosedHandler(func(nc *nats.Conn) {
+			fmt.Println("Connection to NATS server closed, attempting to reconnect...")
+		}),
+	)
+	// Add TLS option if Secure is true
+	if c.natConfInfo.Secure {
+		if c.natConfInfo.CAFile == "" {
+			return fmt.Errorf("NATS TLS enabled but ca_file is missing in config")
+		}
+		opts = append(opts, nats.RootCAs(c.natConfInfo.CAFile))
+		fmt.Println("NATS TLS enabled. Using CA file:", c.natConfInfo.CAFile)
+	}
+	if c.natConfInfo.CertFile != "" && c.natConfInfo.KeyFile != "" {
+		opts = append(opts, nats.ClientCert(c.natConfInfo.CertFile, c.natConfInfo.KeyFile))
+		fmt.Println("NATS mTLS enabled. Using client cert and key:", c.natConfInfo.CertFile, c.natConfInfo.KeyFile)
+	}
 
-        // Perform a single connection attempt. Startup retries are bounded by the
-        // caller (initBrokerConnections / tryRestartProcess) so the worker can
-        // never hang forever when the broker is unreachable.
-        nc, connErr := nats.Connect(url, opts...)
-        if connErr != nil {
-                return fmt.Errorf("NATS connection to %s failed: %w", url, connErr)
-        }
-        c.nc = nc
-        fmt.Println("Successfully connected to NATS server")
-        // Wanna tester add publish at below
+	// Perform a single connection attempt. Startup retries are bounded by the
+	// caller (initBrokerConnections / tryRestartProcess) so the worker can
+	// never hang forever when the broker is unreachable.
+	nc, connErr := nats.Connect(url, opts...)
+	if connErr != nil {
+		return fmt.Errorf("NATS connection to %s failed: %w", url, connErr)
+	}
+	c.nc = nc
+	fmt.Println("Successfully connected to NATS server")
+	// Wanna tester add publish at below
 
-        return nil
+	return nil
 }
 
 func (c *NatsSupport) Pub(topic string, msg string) {

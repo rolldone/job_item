@@ -86,25 +86,44 @@ func (c *AMQPSupport) ConnectPubSub() (*amqp.Connection, error) {
 }
 
 func (c *AMQPSupport) dialAMQP(url string) (*amqp.Connection, error) {
+	tlsConfig, err := c.buildTLSConfig()
+	if err != nil {
+		return nil, err
+	}
 	config := amqp.Config{Dial: amqp.DefaultDial(10 * time.Second)}
-	if c.amqpConfInfo.Secure {
+	config.TLSClientConfig = tlsConfig
+	return amqp.DialConfig(url, config)
+}
+
+// buildTLSConfig builds the TLS configuration for a secure AMQP connection.
+// A missing ca_file keeps the previous behaviour: the client falls back to the
+// system root CAs instead of failing. When ca_file is set it is used as the
+// only root CA pool. Client cert/key are only loaded when both are provided.
+func (c *AMQPSupport) buildTLSConfig() (*tls.Config, error) {
+	if !c.amqpConfInfo.Secure {
+		return nil, nil
+	}
+
+	tlsConfig := &tls.Config{}
+	if c.amqpConfInfo.CAFile != "" {
 		caCert, err := os.ReadFile(c.amqpConfInfo.CAFile)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read CA file: %w", err)
+			return nil, fmt.Errorf("failed to read CA file %q: %w", c.amqpConfInfo.CAFile, err)
 		}
 		caCertPool := x509.NewCertPool()
-		caCertPool.AppendCertsFromPEM(caCert)
-		tlsConfig := &tls.Config{RootCAs: caCertPool}
-		if c.amqpConfInfo.CertFile != "" && c.amqpConfInfo.KeyFile != "" {
-			cert, err := tls.LoadX509KeyPair(c.amqpConfInfo.CertFile, c.amqpConfInfo.KeyFile)
-			if err != nil {
-				return nil, fmt.Errorf("failed to load client cert/key: %w", err)
-			}
-			tlsConfig.Certificates = []tls.Certificate{cert}
+		if !caCertPool.AppendCertsFromPEM(caCert) {
+			return nil, fmt.Errorf("failed to parse CA file %q: no certificates found", c.amqpConfInfo.CAFile)
 		}
-		config.TLSClientConfig = tlsConfig
+		tlsConfig.RootCAs = caCertPool
 	}
-	return amqp.DialConfig(url, config)
+	if c.amqpConfInfo.CertFile != "" && c.amqpConfInfo.KeyFile != "" {
+		cert, err := tls.LoadX509KeyPair(c.amqpConfInfo.CertFile, c.amqpConfInfo.KeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load client cert/key: %w", err)
+		}
+		tlsConfig.Certificates = []tls.Certificate{cert}
+	}
+	return tlsConfig, nil
 }
 
 func (c *AMQPSupport) retryConnection(url string) {
