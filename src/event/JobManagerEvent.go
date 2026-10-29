@@ -41,6 +41,12 @@ type JobManagerEvent struct {
 	conn           support.BrokerConnectionInterface
 	controlUnsubMu sync.Mutex
 	controlUnsub   func()
+
+	// subMu guards unsubscribes, the set of active event subscriptions. It is used to
+	// release old subscriptions before re-subscribing so one event cannot be amplified
+	// into N restart cycles.
+	subMu        sync.Mutex
+	unsubscribes []func()
 }
 
 // Helper function to subscribe and process job events
@@ -98,18 +104,37 @@ func (c *JobManagerEvent) ListenEvent(conn_name string) {
 
 	// Then get the data connection by connection key
 	var initPubSubChannel = func() {
+		// Release any subscriptions from a previous (re)subscribe before adding new ones.
+		c.subMu.Lock()
+		previous := c.unsubscribes
+		c.unsubscribes = nil
+		c.subMu.Unlock()
+		for _, unsub := range previous {
+			if unsub != nil {
+				unsub()
+			}
+		}
+		if len(previous) > 0 {
+			fmt.Println("Re-subscribing: released", len(previous), "previous subscription(s)")
+		}
+
 		conn := support.Helper.BrokerConnection.GetConnection(conn_name)
 		c.conn = conn
 		project_app_uuid := support.Helper.ConfigYaml.ConfigData.Uuid
 		job_datas := support.Helper.ConfigYaml.ConfigData.Project.Job_datas
 		jobs := support.Helper.ConfigYaml.ConfigData.Jobs
 		unsubcribes := []func(){}
+		addUnsub := func(unsub func()) {
+			if unsub != nil {
+				unsubcribes = append(unsubcribes, unsub)
+			}
+		}
 		if support.Helper.ConfigYaml.ConfigData.End_point == "" {
 			for _, v := range jobs {
 				jobConfig := v
 				sub_key := fmt.Sprint(project_app_uuid, ".", v.Event)
 				unsub, err := subscribeAndRunJobEvent(conn, sub_key, jobConfig.Cmd, project_app_uuid, c)
-				_ = append(unsubcribes, unsub)
+				addUnsub(unsub)
 				if err != nil {
 					log.Println(err)
 				}
@@ -125,7 +150,7 @@ func (c *JobManagerEvent) ListenEvent(conn_name string) {
 						isMatch = true
 						sub_key := fmt.Sprint(project_app_uuid, ".", v.Event)
 						unsub, err := subscribeAndRunJobEvent(conn, sub_key, jobConfig.Cmd, project_app_uuid, c)
-						_ = append(unsubcribes, unsub)
+						addUnsub(unsub)
 						if err != nil {
 							log.Println(err)
 						}
@@ -138,7 +163,7 @@ func (c *JobManagerEvent) ListenEvent(conn_name string) {
 								isMatch = true
 								sub_key := fmt.Sprint(project_app_uuid, ".", nestedEvent)
 								unsub, err := subscribeAndRunJobEvent(conn, sub_key, jobConfig.Cmd, project_app_uuid, c)
-								_ = append(unsubcribes, unsub)
+								addUnsub(unsub)
 								if err != nil {
 									log.Println(err)
 								}
@@ -163,12 +188,23 @@ func (c *JobManagerEvent) ListenEvent(conn_name string) {
 		if err != nil {
 			log.Println("Error subscribing to restart event:", err)
 		} else {
-			_ = append(unsubcribes, unsub)
+			addUnsub(unsub)
 		}
 
 		// Task 4 (WO-2026-10-09-001): listener control topic `<identity_id>.control`.
+		// It manages its own previous subscription via controlUnsub, so it is not part of
+		// the general unsubscribe set (avoids releasing it twice).
 		unsubControl := c.listenControlTopic(conn)
-		_ = append(unsubcribes, unsubControl)
+		controlActive := 0
+		if unsubControl != nil {
+			controlActive = 1
+		}
+
+		c.subMu.Lock()
+		c.unsubscribes = unsubcribes
+		active := len(c.unsubscribes)
+		c.subMu.Unlock()
+		fmt.Println("Active subscription count:", active+controlActive)
 	}
 	initPubSubChannel()
 	// Subscribe to a custom event (replace "custom_event" and handler as needed)

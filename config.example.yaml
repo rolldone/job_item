@@ -1,7 +1,7 @@
 credential:
   project_id: 7bd0c868-87a0-4c90-8d27-559677763bb6
   secret_key: xxx-xxx-xxx
-end_point: http://134.209.109.179:5280/api/worker/config
+end_point: http://134.209.109.179:5280
 jobs:
   - name: Validate Doc And Style
     event: validate_doc_and_style

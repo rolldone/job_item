@@ -13,7 +13,9 @@ import (
 	"archive/zip"
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"job_item/src/helper"
@@ -145,8 +147,27 @@ type ConfigYamlSupportConstructPropsType struct {
 }
 
 func ConfigYamlSupportContruct(props ConfigYamlSupportConstructPropsType) (*ConfigYamlSupport, error) {
+	gg, err := newConfigYamlSupportLocal(props)
+	if err != nil {
+		return nil, err
+	}
 
-	gg := ConfigYamlSupport{
+	if gg.ConfigData.End_point != "" {
+		err = gg.loadServerCOnfig()
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		gg.printGroupName("WARNING: End point is not set, using local config only")
+		// If not requesting from server, set Uuid to Project_id
+		gg.ConfigData.Uuid = gg.ConfigData.Credential.Project_id
+	}
+	return gg, nil
+}
+
+// newConfigYamlSupportLocal loads config.yaml + env vars without contacting the server.
+func newConfigYamlSupportLocal(props ConfigYamlSupportConstructPropsType) (*ConfigYamlSupport, error) {
+	gg := &ConfigYamlSupport{
 		Config_path: filepath.Base(props.Config_path),
 	}
 
@@ -169,20 +190,56 @@ func ConfigYamlSupportContruct(props ConfigYamlSupportConstructPropsType) (*Conf
 		return nil, err
 	}
 	gg.useEnvToYamlValue()
-	if gg.ConfigData.End_point != "" {
-		err = gg.loadServerCOnfig()
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		gg.printGroupName("WARNING: End point is not set, using local config only")
-		// If not requesting from server, set Uuid to Project_id
-		gg.ConfigData.Uuid = gg.ConfigData.Credential.Project_id
+	return gg, nil
+}
+
+// ConfigYamlSupportContructLocalOnly reloads config.yaml + env vars without ever calling
+// the server. Server-derived fields from base (broker connection, project, jobs, uuid,
+// version) are carried over so a restart keeps the previously fetched configuration, and
+// the worker identity is preserved across restarts.
+func ConfigYamlSupportContructLocalOnly(props ConfigYamlSupportConstructPropsType, base ConfigData) (*ConfigYamlSupport, error) {
+	gg, err := newConfigYamlSupportLocal(props)
+	if err != nil {
+		return nil, err
 	}
-	return &gg, nil
+
+	if base.Identity_id != "" && os.Getenv("JOB_ITEM_IDENTITY_ID") == "" {
+		gg.ConfigData.Identity_id = base.Identity_id
+	}
+	if base.Broker_connection != nil {
+		gg.ConfigData.Broker_connection = base.Broker_connection
+	}
+	if base.Project.Uuid != "" || len(base.Project.Job_datas) > 0 {
+		gg.ConfigData.Project = base.Project
+	}
+	if len(base.Jobs) > 0 {
+		gg.ConfigData.Jobs = base.Jobs
+	}
+	if base.Uuid != "" {
+		gg.ConfigData.Uuid = base.Uuid
+	}
+	if base.Job_item_version_number != 0 {
+		gg.ConfigData.Job_item_version_number = base.Job_item_version_number
+	}
+	if base.Job_item_version != "" {
+		gg.ConfigData.Job_item_version = base.Job_item_version
+	}
+	if base.Job_item_link != "" {
+		gg.ConfigData.Job_item_link = base.Job_item_link
+	}
+	if len(gg.ConfigData.Execs) == 0 && len(base.Execs) > 0 {
+		gg.ConfigData.Execs = base.Execs
+	}
+	gg.Config_source = "local"
+	gg.Config_cache_age = 0
+	return gg, nil
 }
 
 func (c *ConfigYamlSupport) printGroupName(printText string) {
+	if Helper == nil {
+		fmt.Println("Main >> ", printText)
+		return
+	}
 	fmt.Println(Helper.Segment_app, " >> ", printText)
 }
 
@@ -190,6 +247,171 @@ type ConfigYamlSupport struct {
 	ConfigData        ConfigData
 	child_process_app *string
 	Config_path       string
+	// Config_source records where the last successful configuration came from:
+	// "server", "cache", "env", or empty for a local-only configuration.
+	Config_source string
+	// Config_cache_age is how old the on-disk cache was when Config_source == "cache".
+	Config_cache_age time.Duration
+}
+
+const (
+	// ConfigCacheFileName is the last-known-good configuration cache inside the data dir.
+	ConfigCacheFileName = "config_cache.json"
+
+	defaultConfigHTTPTimeoutSeconds = 10
+	defaultConfigCacheTTLSeconds    = 86400
+)
+
+// ErrConfigFetchRefused is returned when a child process tries to fetch configuration.
+// Child processes must receive their configuration through JOB_ITEM_CONFIG_DATA.
+var ErrConfigFetchRefused = errors.New("config fetch refused: child process must use JOB_ITEM_CONFIG_DATA")
+
+// configCachePayload is the on-disk representation of the last-known-good config.
+type configCachePayload struct {
+	SavedAt time.Time  `json:"saved_at"`
+	Config  ConfigData `json:"config"`
+}
+
+// configDurationEnvSeconds reads an integer seconds env var and falls back to def on
+// empty/invalid/non-positive values, logging a warning through the receiver.
+func (c *ConfigYamlSupport) configDurationEnvSeconds(name string, def int) time.Duration {
+	raw := os.Getenv(name)
+	if raw == "" {
+		return time.Duration(def) * time.Second
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		c.printGroupName(fmt.Sprintf("WARNING: invalid %s=%q, falling back to %d seconds", name, raw, def))
+		return time.Duration(def) * time.Second
+	}
+	return time.Duration(value) * time.Second
+}
+
+func (c *ConfigYamlSupport) configHTTPTimeout() time.Duration {
+	return c.configDurationEnvSeconds("JOB_ITEM_CONFIG_HTTP_TIMEOUT_SECONDS", defaultConfigHTTPTimeoutSeconds)
+}
+
+func (c *ConfigYamlSupport) configCacheTTL() time.Duration {
+	return c.configDurationEnvSeconds("JOB_ITEM_CONFIG_CACHE_TTL_SECONDS", defaultConfigCacheTTLSeconds)
+}
+
+// configDataDir resolves the cache directory with the same precedence as the process
+// state store: env JOB_ITEM_DATA_DIR > YAML data_dir > default .job_item_data.
+func (c *ConfigYamlSupport) configDataDir() string {
+	if env := os.Getenv("JOB_ITEM_DATA_DIR"); env != "" {
+		return env
+	}
+	if c.ConfigData.Data_dir != "" {
+		return c.ConfigData.Data_dir
+	}
+	return DefaultDataDirName
+}
+
+func (c *ConfigYamlSupport) configCachePath() string {
+	return filepath.Join(c.configDataDir(), ConfigCacheFileName)
+}
+
+// saveConfigCache persists ConfigData atomically (temp file + rename) with mode 0600.
+func (c *ConfigYamlSupport) saveConfigCache() error {
+	dir := c.configDataDir()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create config cache dir %q: %w", dir, err)
+	}
+
+	payload := configCachePayload{SavedAt: time.Now().UTC(), Config: c.ConfigData}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal config cache: %w", err)
+	}
+
+	tmp, err := os.CreateTemp(dir, ".config_cache-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create config cache temp file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	cleanup := func() {
+		tmp.Close()
+		os.Remove(tmpPath)
+	}
+
+	if err := tmp.Chmod(0o600); err != nil {
+		cleanup()
+		return fmt.Errorf("chmod config cache temp file: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		cleanup()
+		return fmt.Errorf("write config cache temp file: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		cleanup()
+		return fmt.Errorf("sync config cache temp file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("close config cache temp file: %w", err)
+	}
+
+	if err := os.Rename(tmpPath, c.configCachePath()); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("replace config cache: %w", err)
+	}
+	return nil
+}
+
+// applyConfigCache loads the last-known-good server fields from disk and merges them
+// into the local configuration. It returns the cache age so callers can warn when the
+// cache is older than TTL. Local fields (credential, end_point, data_dir) are preserved.
+func (c *ConfigYamlSupport) applyConfigCache() (time.Duration, error) {
+	path := c.configCachePath()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, fmt.Errorf("read config cache %q: %w", path, err)
+	}
+
+	var payload configCachePayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return 0, fmt.Errorf("parse config cache %q: %w", path, err)
+	}
+
+	age := time.Since(payload.SavedAt)
+	if payload.SavedAt.IsZero() {
+		if info, statErr := os.Stat(path); statErr == nil {
+			age = time.Since(info.ModTime())
+		}
+	}
+
+	cached := payload.Config
+	c.ConfigData.Broker_connection = cached.Broker_connection
+	c.ConfigData.Project = cached.Project
+	c.ConfigData.Jobs = cached.Jobs
+	c.ConfigData.Uuid = cached.Uuid
+	c.ConfigData.Job_item_version_number = cached.Job_item_version_number
+	c.ConfigData.Job_item_version = cached.Job_item_version
+	c.ConfigData.Job_item_link = cached.Job_item_link
+	if len(cached.Execs) > 0 {
+		c.ConfigData.Execs = cached.Execs
+	}
+	return age, nil
+}
+
+// RefreshCacheFromServer performs a single server fetch using a deep copy of the
+// current configuration and only refreshes the on-disk cache. It never mutates the
+// live configuration, so it is safe to call from a background goroutine.
+func (c *ConfigYamlSupport) RefreshCacheFromServer() error {
+	data, err := json.Marshal(c.ConfigData)
+	if err != nil {
+		return fmt.Errorf("clone config for refresh: %w", err)
+	}
+	var clone ConfigData
+	if err := json.Unmarshal(data, &clone); err != nil {
+		return fmt.Errorf("clone config for refresh: %w", err)
+	}
+
+	probe := &ConfigYamlSupport{ConfigData: clone, Config_path: c.Config_path}
+	if err := probe.fetchAndMergeServerConfig(); err != nil {
+		return err
+	}
+	return probe.saveConfigCache()
 }
 
 // LoadConfigYaml loads the configuration from a YAML file.
@@ -253,11 +475,36 @@ func (c *ConfigYamlSupport) GetEnv() []string {
 		"JOB_ITEM_IDENTITY_ID=" + c.ConfigData.Identity_id,
 		"JOB_ITEM_BASE_URL=" + baseURL,
 		"JOB_ITEM_CONFIG_DATA=" + string(configData),
+		// Explicit marker so a child process never tries to fetch config from the server.
+		"JOB_ITEM_CONFIG_SOURCE=child",
 		// Specific endpoints for child process to add/get share data
 		"JOB_ITEM_SHARE_DATA_HOST=" + shareHost,
 		"JOB_ITEM_SHARE_DATA_ADD=" + jobItemShareDataAdd,
 		"JOB_ITEM_SHARE_DATA_GET=" + jobItemShareDataGet,
 	}
+}
+
+// mergeEnv appends overrides to base, dropping any base entry that shares a key with an
+// override so the override always wins inside the child process (duplicate keys are
+// otherwise read first-wins by os.Getenv on Unix).
+func mergeEnv(base []string, overrides []string) []string {
+	keys := make(map[string]struct{}, len(overrides))
+	for _, kv := range overrides {
+		if idx := strings.IndexByte(kv, '='); idx >= 0 {
+			keys[kv[:idx]] = struct{}{}
+		}
+	}
+
+	merged := make([]string, 0, len(base)+len(overrides))
+	for _, kv := range base {
+		if idx := strings.IndexByte(kv, '='); idx >= 0 {
+			if _, ok := keys[kv[:idx]]; ok {
+				continue
+			}
+		}
+		merged = append(merged, kv)
+	}
+	return append(merged, overrides...)
 }
 
 func (c *ConfigYamlSupport) GetEnvForExecProcess() []string {
@@ -275,10 +522,9 @@ func (c *ConfigYamlSupport) GetEnvForExecProcess() []string {
 }
 
 // loadServerCOnfig requests the configuration from the server and updates the ConfigData.
-// It returns an error if the request fails or the response is invalid.
+// If the request fails and a cache exists, the cached server fields are applied and nil is
+// returned so the worker can still start. A child process never performs a fetch.
 func (c *ConfigYamlSupport) loadServerCOnfig() error {
-	var param = map[string]interface{}{}
-
 	if os.Getenv("JOB_ITEM_CONFIG_DATA") != "" {
 		// If JOB_ITEM_CONFIG_DATA is set, use it as the config data
 		configDataString := os.Getenv("JOB_ITEM_CONFIG_DATA")
@@ -288,43 +534,84 @@ func (c *ConfigYamlSupport) loadServerCOnfig() error {
 			return fmt.Errorf("error unmarshalling JOB_ITEM_CONFIG_DATA: %w", err)
 		}
 		c.ConfigData = configData
+		c.Config_source = "env"
 		c.printGroupName("Using JOB_ITEM_CONFIG_DATA from environment variable")
 		return nil
 	}
 
-	param["project_id"] = c.ConfigData.Credential.Project_id
-	param["secret_key"] = c.ConfigData.Credential.Secret_key
+	// Explicit guard: a child process must never contact the config endpoint.
+	if strings.EqualFold(os.Getenv("JOB_ITEM_CONFIG_SOURCE"), "child") {
+		return ErrConfigFetchRefused
+	}
 
-	os := runtime.GOOS
-	param["os"] = os               // windows | darwin | linux
-	param["arch"] = runtime.GOARCH //  386, amd64, arm, s390x
+	if err := c.fetchAndMergeServerConfig(); err != nil {
+		age, cacheErr := c.applyConfigCache()
+		if cacheErr != nil {
+			return err
+		}
+		c.Config_source = "cache"
+		c.Config_cache_age = age
+		if ttl := c.configCacheTTL(); age > ttl {
+			c.printGroupName(fmt.Sprintf(
+				"WARNING: config cache is older than TTL (age=%s ttl=%s); using stale cache because the server is unreachable",
+				age.Round(time.Second), ttl))
+		}
+		c.printGroupName(fmt.Sprintf(
+			"config source=cache age=%s (server fetch failed: %v)", age.Round(time.Second), err))
+		return nil
+	}
+
+	c.Config_source = "server"
+	if err := c.saveConfigCache(); err != nil {
+		c.printGroupName("WARNING: failed to persist config cache: " + err.Error())
+	} else {
+		c.printGroupName("config source=server (cache updated)")
+	}
+	return nil
+}
+
+// fetchAndMergeServerConfig performs POST {end_point}/api/worker/config with a bounded
+// HTTP client and context, then merges the response into ConfigData.
+func (c *ConfigYamlSupport) fetchAndMergeServerConfig() error {
+	param := map[string]interface{}{
+		"project_id": c.ConfigData.Credential.Project_id,
+		"secret_key": c.ConfigData.Credential.Secret_key,
+		"os":         runtime.GOOS,   // windows | darwin | linux
+		"arch":       runtime.GOARCH, //  386, amd64, arm, s390x
+	}
 
 	hostInfo, err := Helper.HardwareInfo.GetInfoHardware()
 	if err != nil {
 		return fmt.Errorf("error getting hardware info: %w", err)
 	}
 	param["host"] = hostInfo
+
 	jsonDataParam, err := json.Marshal(param)
 	if err != nil {
 		return fmt.Errorf("error marshalling config request: %w", err)
 	}
-	var client = &http.Client{}
+
+	timeout := c.configHTTPTimeout()
+	client := &http.Client{Timeout: timeout}
 	endpoint := fmt.Sprint(c.ConfigData.End_point, "/api/worker/config")
 	c.printGroupName("Attempting to connect to server: " + endpoint)
 
-	request, err := http.NewRequest("POST", endpoint, bytes.NewBuffer(jsonDataParam))
-	// request.Header.Set("X-Custom-Header", "myvalue")
-	request.Header.Set("Content-Type", "application/json")
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewBuffer(jsonDataParam))
 	if err != nil {
 		c.printGroupName("Failed to create HTTP request to " + endpoint + " :: " + err.Error())
 		return err
-		// panic(1)
 	}
+	request.Header.Set("Content-Type", "application/json")
 
 	c.printGroupName("Sending configuration request to server...")
+	started := time.Now()
 	response, err := client.Do(request)
+	elapsed := time.Since(started)
 	if err != nil {
-		c.printGroupName("Connection failed to server " + endpoint)
+		c.printGroupName("Connection failed to server " + endpoint + " after " + elapsed.Round(time.Millisecond).String())
 		c.printGroupName("This could mean:")
 		c.printGroupName("  - Server is down or unreachable")
 		c.printGroupName("  - Network connectivity issues")
@@ -337,12 +624,12 @@ func (c *ConfigYamlSupport) loadServerCOnfig() error {
 
 	// Check HTTP status code
 	if response.StatusCode != http.StatusOK {
-		c.printGroupName("ERROR: Server returned HTTP " + fmt.Sprint(response.StatusCode) + " status code")
+		c.printGroupName("ERROR: Server returned HTTP " + fmt.Sprint(response.StatusCode) + " status code after " + elapsed.Round(time.Millisecond).String())
 		c.printGroupName("Expected 200 OK but got " + response.Status)
 		return fmt.Errorf("server returned non-200 status: %d %s", response.StatusCode, response.Status)
 	}
 
-	c.printGroupName("Successfully connected to server (HTTP " + fmt.Sprint(response.StatusCode) + ")")
+	c.printGroupName("Successfully connected to server (HTTP " + fmt.Sprint(response.StatusCode) + ", " + elapsed.Round(time.Millisecond).String() + ")")
 	bodyData := struct {
 		Return ConfigData
 	}{}
@@ -775,7 +1062,7 @@ func (c *ConfigYamlSupport) RunChildProcess() (*exec.Cmd, error) {
 	}
 
 	// Set environment variables for the command
-	cmd.Env = append(os.Environ(), c.GetEnv()...)
+	cmd.Env = mergeEnv(os.Environ(), c.GetEnv())
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -814,7 +1101,7 @@ func (c *ConfigYamlSupport) RunChildExecsProcess() (*exec.Cmd, error) {
 		return nil, fmt.Errorf("failed to create command for child exec process: %w", err)
 	}
 	// Set environment variables for the command
-	cmd.Env = append(os.Environ(), c.GetEnv()...)
+	cmd.Env = mergeEnv(os.Environ(), c.GetEnv())
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

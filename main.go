@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	jobitem "job_item/src/controller/JobItem"
@@ -12,6 +13,7 @@ import (
 	"job_item/src/helper"
 	"job_item/support"
 	"log"
+	"math/rand"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -20,6 +22,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -169,7 +172,7 @@ func main() {
 		case "start":
 			support.Helper.PrintGroupName("Starting job_item process")
 		case "restart":
-			err := initMain(configYamlSupport, configYamlSupport.Config_path)
+			err := initMainForRestart(configYamlSupport, configYamlSupport.Config_path)
 			if err != nil {
 				support.Helper.PrintErrName("Error initializing config yaml support: "+err.Error(), "ERR-30350903201")
 				os.Exit(1)
@@ -268,34 +271,209 @@ func tryRestartProcess(brokerKey string, brokerType string, identityID string, m
 }
 
 func initializeConfigYamlSupport(configYamlSupport *support.ConfigYamlSupport, config string) error {
-	totalCountRequest := 3
-	var lastErr error
-	for attempt := 1; attempt <= totalCountRequest; attempt++ {
+	opts := loadConfigFetchOptions()
+	interval := opts.initialBackoff
+	attempt := 0
+
+	// Cooldown only gates the start of a fetch cycle (boot / fallback after restart), not
+	// the backoff retries inside a cycle.
+	rootConfigFetchGate.wait(opts.minGap)
+
+	for {
+		attempt++
+
+		started := time.Now()
 		confItem, err := support.ConfigYamlSupportContruct(support.ConfigYamlSupportConstructPropsType{
 			Config_path: config,
 		})
-		if err != nil {
-			lastErr = err
-			support.Helper.PrintErrName(
-				fmt.Sprintf("Error initializing config yaml support (attempt %d/%d): %v", attempt, totalCountRequest, err),
-				"ERR-3030903200")
-			if attempt < totalCountRequest {
-				time.Sleep(time.Duration(time.Second) * 3)
-				support.Helper.PrintGroupName("Retry connection")
+		elapsed := time.Since(started)
+
+		if err == nil {
+			*configYamlSupport = *confItem
+			configLog(fmt.Sprintf(
+				"config fetch attempt %d succeeded in %s (source=%s)",
+				attempt, elapsed.Round(time.Millisecond), confItem.Config_source))
+			if confItem.Config_source == "cache" {
+				startBackgroundConfigRefresh(configYamlSupport, opts)
 			}
-			continue
+			return nil
 		}
-		*configYamlSupport = *confItem
-		return nil
+
+		// A refused fetch (child process) is not retryable.
+		if errors.Is(err, support.ErrConfigFetchRefused) {
+			return err
+		}
+
+		sleepFor := withJitter(interval)
+		configWarn(fmt.Sprintf(
+			"config fetch attempt %d failed in %s: %v; retrying in %s (ceiling %s)",
+			attempt, elapsed.Round(time.Millisecond), err, sleepFor.Round(time.Millisecond), opts.maxInterval),
+			"ERR-CONFIG-FETCH-RETRY")
+
+		time.Sleep(sleepFor)
+		interval = nextBackoff(interval, opts.maxInterval)
 	}
-	return lastErr
+}
+
+const (
+	defaultConfigFetchBackoff     = 2 * time.Second
+	defaultConfigFetchMaxInterval = 5 * time.Minute
+	defaultConfigFetchMinGap      = 30 * time.Second
+)
+
+type configFetchOptions struct {
+	initialBackoff time.Duration
+	maxInterval    time.Duration
+	minGap         time.Duration
+}
+
+func configLog(msg string) {
+	if support.Helper != nil {
+		support.Helper.PrintGroupName(msg)
+		return
+	}
+	fmt.Println(msg)
+}
+
+func configWarn(msg string, code string) {
+	if support.Helper != nil {
+		support.Helper.PrintErrName(msg, code)
+		return
+	}
+	fmt.Println(code, ">>", msg)
+}
+
+// configSecondsEnv reads an integer-seconds env var, falling back to def on
+// empty/invalid/non-positive values.
+func configSecondsEnv(name string, def int, code string) time.Duration {
+	raw := os.Getenv(name)
+	if raw == "" {
+		return time.Duration(def) * time.Second
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		configWarn(fmt.Sprintf("Invalid %s=%q, falling back to %d seconds", name, raw, def), code)
+		return time.Duration(def) * time.Second
+	}
+	return time.Duration(value) * time.Second
+}
+
+func loadConfigFetchOptions() configFetchOptions {
+	opts := configFetchOptions{
+		initialBackoff: time.Duration(0),
+		maxInterval:    time.Duration(0),
+		minGap:         time.Duration(0),
+	}
+	opts.initialBackoff = configSecondsEnv("JOB_ITEM_CONFIG_FETCH_BACKOFF_SECONDS", int(defaultConfigFetchBackoff/time.Second), "ERR-CONFIG-FETCH-BACKOFF")
+	opts.maxInterval = configSecondsEnv("JOB_ITEM_CONFIG_FETCH_MAX_INTERVAL_SECONDS", int(defaultConfigFetchMaxInterval/time.Second), "ERR-CONFIG-FETCH-MAX")
+	opts.minGap = configSecondsEnv("JOB_ITEM_CONFIG_FETCH_MIN_GAP_SECONDS", int(defaultConfigFetchMinGap/time.Second), "ERR-CONFIG-FETCH-GAP")
+
+	if opts.maxInterval < opts.initialBackoff {
+		configWarn(fmt.Sprintf(
+			"JOB_ITEM_CONFIG_FETCH_MAX_INTERVAL_SECONDS (%s) is below the initial backoff (%s); clamping to the initial backoff",
+			opts.maxInterval, opts.initialBackoff), "ERR-CONFIG-FETCH-MAX-CLAMP")
+		opts.maxInterval = opts.initialBackoff
+	}
+	return opts
+}
+
+// configFetchGate enforces a minimum gap between fetch cycles within the same root
+// process so back-to-back restarts cannot produce a burst of requests.
+type configFetchGate struct {
+	mu   sync.Mutex
+	last time.Time
+}
+
+var rootConfigFetchGate configFetchGate
+
+func (g *configFetchGate) wait(minGap time.Duration) {
+	if minGap <= 0 {
+		g.mark()
+		return
+	}
+
+	g.mu.Lock()
+	last := g.last
+	g.mu.Unlock()
+
+	if !last.IsZero() {
+		if elapsed := time.Since(last); elapsed < minGap {
+			waitFor := minGap - elapsed
+			configLog(fmt.Sprintf("config fetch cooldown: waiting %s before the next fetch (min gap %s)", waitFor.Round(time.Millisecond), minGap))
+			time.Sleep(waitFor)
+		}
+	}
+	g.mark()
+}
+
+func (g *configFetchGate) mark() {
+	g.mu.Lock()
+	g.last = time.Now()
+	g.mu.Unlock()
+}
+
+// withJitter returns d scaled by a random factor of [-20%, +20%].
+func withJitter(d time.Duration) time.Duration {
+	if d <= 0 {
+		return d
+	}
+	factor := 0.8 + rand.Float64()*0.4
+	return time.Duration(float64(d) * factor)
+}
+
+// nextBackoff doubles current until it reaches max, then stays at max forever.
+func nextBackoff(current, max time.Duration) time.Duration {
+	if max <= 0 {
+		return current
+	}
+	next := current * 2
+	if next <= 0 || next > max {
+		return max
+	}
+	return next
+}
+
+// startBackgroundConfigRefresh keeps trying to refresh the on-disk cache while the
+// worker runs from a cached configuration. It never mutates the live config.
+func startBackgroundConfigRefresh(configYamlSupport *support.ConfigYamlSupport, opts configFetchOptions) {
+	go func() {
+		interval := opts.initialBackoff
+		for attempt := 1; ; attempt++ {
+			sleepFor := withJitter(interval)
+			configLog(fmt.Sprintf("config background refresh attempt %d scheduled in %s (running from cache)", attempt, sleepFor.Round(time.Millisecond)))
+			time.Sleep(sleepFor)
+
+			if err := configYamlSupport.RefreshCacheFromServer(); err != nil {
+				configWarn(fmt.Sprintf("config background refresh attempt %d failed: %v", attempt, err), "ERR-CONFIG-REFRESH")
+				interval = nextBackoff(interval, opts.maxInterval)
+				continue
+			}
+			configLog("config background refresh succeeded; cache updated (live config stays in use until next restart)")
+			return
+		}
+	}()
 }
 
 func initMain(configYamlSupport *support.ConfigYamlSupport, config string) error {
+	return initMainInternal(configYamlSupport, config, false)
+}
+
+// initMainForRestart re-initializes the worker for a restart without contacting the
+// config server: it reuses the in-memory configuration and only refreshes local values.
+func initMainForRestart(configYamlSupport *support.ConfigYamlSupport, config string) error {
+	return initMainInternal(configYamlSupport, config, true)
+}
+
+func initMainInternal(configYamlSupport *support.ConfigYamlSupport, config string, restart bool) error {
 	supportSupport := support.SupportConstruct("Main")
 
-	// Retry post data to get authentication from server
-	err := initializeConfigYamlSupport(configYamlSupport, config)
+	var err error
+	if restart {
+		err = reloadConfigForRestart(configYamlSupport, config)
+	} else {
+		// Retry post data to get authentication from server
+		err = initializeConfigYamlSupport(configYamlSupport, config)
+	}
 	if err != nil {
 		support.Helper.PrintErrName("Error initializing config yaml support: "+err.Error(), "ERR-303509ff03200")
 		return err
@@ -331,6 +509,28 @@ func initMain(configYamlSupport *support.ConfigYamlSupport, config string) error
 	supportSupport.Register(ginSupport)
 	ginInitialize(ginSupport.Router)
 	return nil
+}
+
+// reloadConfigForRestart rebuilds the configuration for a restart without performing a
+// server fetch. Server-derived fields are carried over from memory so restarts (fsnotify
+// or the job_item_restart event) never add config requests.
+func reloadConfigForRestart(configYamlSupport *support.ConfigYamlSupport, config string) error {
+	if configYamlSupport != nil && (configYamlSupport.ConfigData.Broker_connection != nil || configYamlSupport.ConfigData.Credential.Project_id != "") {
+		fresh, err := support.ConfigYamlSupportContructLocalOnly(support.ConfigYamlSupportConstructPropsType{
+			Config_path: config,
+		}, configYamlSupport.ConfigData)
+		if err != nil {
+			configWarn("restart :: failed to reload local config, keeping in-memory config: "+err.Error(), "ERR-CONFIG-RESTART-RELOAD")
+			return nil
+		}
+		configLog(fmt.Sprintf("restart :: config reused from memory (source=%s); server fetch skipped", fresh.Config_source))
+		*configYamlSupport = *fresh
+		return nil
+	}
+
+	// No usable in-memory config: fall back to the normal (cooldown-gated) fetch path.
+	configLog("restart :: no in-memory config available, fetching configuration (cooldown applies)")
+	return initializeConfigYamlSupport(configYamlSupport, config)
 }
 
 func initCli() bool {

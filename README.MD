@@ -83,7 +83,8 @@ Download the pre-built binary for your platform from the releases page.
 identity_id: "worker-node-01"
 
 # Job Manager endpoint for configuration updates
-end_point: "http://job-manager:5280/api/worker/config"
+# Do NOT append /api/worker/config; the worker adds it automatically.
+end_point: "http://job-manager:5280"
 
 # Authentication credentials
 credential:
@@ -632,6 +633,28 @@ CMD ["./job_item"]
 - `JOB_ITEM_STATE_RETENTION_HOURS`: Retention (hours) for final process-state rows before cleanup (default `24`)
 - `JOB_ITEM_BROKER_CONNECT_MAX_ATTEMPTS`: Maximum broker connection attempts during startup (default `20`; invalid/non-positive values fall back to the default)
 - `JOB_ITEM_BROKER_CONNECT_BACKOFF_SECONDS`: Delay in seconds between broker connection attempts (default `5`; invalid/non-positive values fall back to the default)
+- `JOB_ITEM_CONFIG_FETCH_BACKOFF_SECONDS`: Initial retry backoff for fetching config (default `2`; invalid/non-positive values fall back to the default)
+- `JOB_ITEM_CONFIG_FETCH_MAX_INTERVAL_SECONDS`: Backoff ceiling for config fetches (default `300`); retries continue at this interval indefinitely
+- `JOB_ITEM_CONFIG_FETCH_MIN_GAP_SECONDS`: Minimum gap between config fetch cycles across restarts (default `30`; invalid/non-positive values fall back to the default)
+- `JOB_ITEM_CONFIG_HTTP_TIMEOUT_SECONDS`: Timeout for a single config HTTP request (default `10`; invalid/non-positive values fall back to the default)
+- `JOB_ITEM_CONFIG_CACHE_TTL_SECONDS`: TTL of the last-known-good config cache (default `86400`; older cache is still used with a warning)
+
+#### Config fetch policy
+
+The worker calls `POST {end_point}/api/worker/config`. `end_point` must **not** include `/api/worker/config`
+(the worker appends it), otherwise the request hits a doubled path.
+
+- **One fetch per boot** when the server is healthy.
+- Retries are **unlimited** but use exponential backoff with ±20% jitter, growing until the ceiling and then
+  staying at the ceiling. A failed fetch never exits or panics the worker.
+- A **cooldown** (`JOB_ITEM_CONFIG_FETCH_MIN_GAP_SECONDS`) gates the start of each fetch cycle, so back-to-back
+  restarts cannot produce a burst of requests.
+- **Restarts never fetch**: both `config.yaml` changes (fsnotify) and the `job_item_restart` event reuse the
+  in-memory configuration.
+- The last good server response is cached atomically at `<data dir>/config_cache.json` (mode `0600`). When the
+  server is unreachable the cache is used (with a warning when older than TTL) and a background refresher keeps
+  retrying without mutating the live configuration.
+- **Child processes never fetch**: they receive `JOB_ITEM_CONFIG_DATA` and `JOB_ITEM_CONFIG_SOURCE=child`.
 
 #### Broker connection retry and failure markers
 
