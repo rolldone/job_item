@@ -37,21 +37,15 @@ func TestConfigSecondsEnv(t *testing.T) {
 	})
 }
 
-func TestNextBackoff(t *testing.T) {
-	tests := []struct {
-		current time.Duration
-		max     time.Duration
-		want    time.Duration
-	}{
-		{current: 2 * time.Second, max: 5 * time.Minute, want: 4 * time.Second},
-		{current: 4 * time.Minute, max: 5 * time.Minute, want: 5 * time.Minute},
-		{current: 5 * time.Minute, max: 5 * time.Minute, want: 5 * time.Minute},
-	}
+func TestNextBackoffRemoved(t *testing.T) {
+	// Retry delays are fixed now; this guards against reintroducing exponential growth.
+	t.Setenv("JOB_ITEM_CONFIG_FETCH_BACKOFF_SECONDS", "2")
+	t.Setenv("JOB_ITEM_CONFIG_FETCH_MAX_INTERVAL_SECONDS", "300")
+	t.Setenv("JOB_ITEM_CONFIG_FETCH_MIN_GAP_SECONDS", "30")
 
-	for _, tt := range tests {
-		if got := nextBackoff(tt.current, tt.max); got != tt.want {
-			t.Fatalf("nextBackoff(%s, %s) = %s, want %s", tt.current, tt.max, got, tt.want)
-		}
+	opts := loadConfigFetchOptions()
+	if opts.retryInterval != 2*time.Second {
+		t.Fatalf("retryInterval = %s, want the fixed 2s value", opts.retryInterval)
 	}
 }
 
@@ -65,28 +59,36 @@ func TestWithJitterWithinRange(t *testing.T) {
 	}
 }
 
-func TestLoadConfigFetchOptionsClampsCeiling(t *testing.T) {
-	t.Setenv("JOB_ITEM_CONFIG_FETCH_BACKOFF_SECONDS", "60")
-	t.Setenv("JOB_ITEM_CONFIG_FETCH_MAX_INTERVAL_SECONDS", "10")
+func TestLoadConfigFetchOptionsUsesFixedRetryInterval(t *testing.T) {
+	t.Setenv("JOB_ITEM_CONFIG_FETCH_BACKOFF_SECONDS", "7")
+	t.Setenv("JOB_ITEM_CONFIG_FETCH_MAX_INTERVAL_SECONDS", "300")
 	t.Setenv("JOB_ITEM_CONFIG_FETCH_MIN_GAP_SECONDS", "5")
 
 	opts := loadConfigFetchOptions()
-	if opts.initialBackoff != 60*time.Second {
-		t.Fatalf("initialBackoff = %s, want 60s", opts.initialBackoff)
-	}
-	if opts.maxInterval != 60*time.Second {
-		t.Fatalf("maxInterval = %s, want 60s (clamped to initial backoff)", opts.maxInterval)
+	if opts.retryInterval != 7*time.Second {
+		t.Fatalf("retryInterval = %s, want 7s", opts.retryInterval)
 	}
 	if opts.minGap != 5*time.Second {
 		t.Fatalf("minGap = %s, want 5s", opts.minGap)
 	}
 }
 
+func TestLoadConfigFetchOptionsClampsRetryInterval(t *testing.T) {
+	t.Setenv("JOB_ITEM_CONFIG_FETCH_BACKOFF_SECONDS", "600")
+	t.Setenv("JOB_ITEM_CONFIG_FETCH_MAX_INTERVAL_SECONDS", "300")
+	t.Setenv("JOB_ITEM_CONFIG_FETCH_MIN_GAP_SECONDS", "30")
+
+	opts := loadConfigFetchOptions()
+	if opts.retryInterval != 300*time.Second {
+		t.Fatalf("retryInterval = %s, want 300s (clamped to max interval)", opts.retryInterval)
+	}
+}
+
 func fastRetryOpts() configFetchOptions {
 	return configFetchOptions{
-		initialBackoff: time.Millisecond,
-		maxInterval:    2 * time.Millisecond,
-		minGap:         0,
+		retryInterval: time.Millisecond,
+		maxInterval:   2 * time.Millisecond,
+		minGap:        0,
 	}
 }
 

@@ -633,8 +633,8 @@ CMD ["./job_item"]
 - `JOB_ITEM_STATE_RETENTION_HOURS`: Retention (hours) for final process-state rows before cleanup (default `24`)
 - `JOB_ITEM_BROKER_CONNECT_MAX_ATTEMPTS`: Maximum broker connection attempts during startup (default `20`; invalid/non-positive values fall back to the default)
 - `JOB_ITEM_BROKER_CONNECT_BACKOFF_SECONDS`: Delay in seconds between broker connection attempts (default `5`; invalid/non-positive values fall back to the default)
-- `JOB_ITEM_CONFIG_FETCH_BACKOFF_SECONDS`: Initial retry backoff for fetching config (default `2`; invalid/non-positive values fall back to the default)
-- `JOB_ITEM_CONFIG_FETCH_MAX_INTERVAL_SECONDS`: Backoff ceiling for config fetches (default `300`); retries continue at this interval indefinitely
+- `JOB_ITEM_CONFIG_FETCH_BACKOFF_SECONDS`: **Fixed** retry delay for config fetches (default `2`; invalid/non-positive values fall back to the default). The delay never grows between attempts.
+- `JOB_ITEM_CONFIG_FETCH_MAX_INTERVAL_SECONDS`: Upper bound used only to clamp `JOB_ITEM_CONFIG_FETCH_BACKOFF_SECONDS` (default `300`); set the backoff to this value if you want slow retries.
 - `JOB_ITEM_CONFIG_FETCH_MIN_GAP_SECONDS`: Minimum gap between config fetch cycles across restarts (default `30`; invalid/non-positive values fall back to the default)
 - `JOB_ITEM_CONFIG_HTTP_TIMEOUT_SECONDS`: Timeout for a single config HTTP request (default `10`; invalid/non-positive values fall back to the default)
 - `JOB_ITEM_CONFIG_CACHE_TTL_SECONDS`: TTL of the last-known-good config cache (default `86400`; older cache is still used with a warning)
@@ -645,8 +645,8 @@ The worker calls `POST {end_point}/api/worker/config`. `end_point` must **not** 
 (the worker appends it), otherwise the request hits a doubled path.
 
 - **One fetch per boot** when the server is healthy.
-- Retries are **unlimited** but use exponential backoff with ±20% jitter, growing until the ceiling and then
-  staying at the ceiling. A failed fetch never exits or panics the worker.
+- Retries are **unlimited** with a **fixed delay** (`JOB_ITEM_CONFIG_FETCH_BACKOFF_SECONDS`, ±20% jitter); the
+  delay never doubles. A failed fetch never exits or panics the worker.
 - A **cooldown** (`JOB_ITEM_CONFIG_FETCH_MIN_GAP_SECONDS`) gates the start of each fetch cycle, so back-to-back
   restarts cannot produce a burst of requests.
 - **Restarts never fetch**: both `config.yaml` changes (fsnotify) and the `job_item_restart` event reuse the
@@ -657,7 +657,7 @@ The worker calls `POST {end_point}/api/worker/config`. `end_point` must **not** 
 - **Child processes never fetch**: they receive `JOB_ITEM_CONFIG_DATA` and `JOB_ITEM_CONFIG_SOURCE=child`.
 - **Startup never exits on a retryable failure**: if the fetched configuration is incomplete (for example
   `broker connection type is invalid: config "type" is not specified`), the worker stays alive, logs
-  `ERR-STARTUP-RETRY` and retries with the same backoff/ceiling, re-fetching the config (subject to the
+  `ERR-STARTUP-RETRY` and retries at the same fixed delay, re-fetching the config (subject to the
   cooldown). Fix the broker configuration on the server and the worker picks it up on the next attempt
   without a manual restart.
 

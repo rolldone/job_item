@@ -272,11 +272,10 @@ func tryRestartProcess(brokerKey string, brokerType string, identityID string, m
 
 func initializeConfigYamlSupport(configYamlSupport *support.ConfigYamlSupport, config string) error {
 	opts := loadConfigFetchOptions()
-	interval := opts.initialBackoff
 	attempt := 0
 
 	// Cooldown only gates the start of a fetch cycle (boot / fallback after restart), not
-	// the backoff retries inside a cycle.
+	// the retries inside a cycle.
 	rootConfigFetchGate.wait(opts.minGap)
 
 	for {
@@ -304,14 +303,13 @@ func initializeConfigYamlSupport(configYamlSupport *support.ConfigYamlSupport, c
 			return err
 		}
 
-		sleepFor := withJitter(interval)
+		sleepFor := withJitter(opts.retryInterval)
 		configWarn(fmt.Sprintf(
-			"config fetch attempt %d failed in %s: %v; retrying in %s (ceiling %s)",
-			attempt, elapsed.Round(time.Millisecond), err, sleepFor.Round(time.Millisecond), opts.maxInterval),
+			"config fetch attempt %d failed in %s: %v; retrying in %s (fixed interval)",
+			attempt, elapsed.Round(time.Millisecond), err, sleepFor.Round(time.Millisecond)),
 			"ERR-CONFIG-FETCH-RETRY")
 
 		time.Sleep(sleepFor)
-		interval = nextBackoff(interval, opts.maxInterval)
 	}
 }
 
@@ -322,9 +320,11 @@ const (
 )
 
 type configFetchOptions struct {
-	initialBackoff time.Duration
-	maxInterval    time.Duration
-	minGap         time.Duration
+	// retryInterval is the FIXED delay between retries. It never grows.
+	retryInterval time.Duration
+	// maxInterval is only used as an upper bound when validating retryInterval.
+	maxInterval time.Duration
+	minGap      time.Duration
 }
 
 func configLog(msg string) {
@@ -359,20 +359,18 @@ func configSecondsEnv(name string, def int, code string) time.Duration {
 }
 
 func loadConfigFetchOptions() configFetchOptions {
-	opts := configFetchOptions{
-		initialBackoff: time.Duration(0),
-		maxInterval:    time.Duration(0),
-		minGap:         time.Duration(0),
-	}
-	opts.initialBackoff = configSecondsEnv("JOB_ITEM_CONFIG_FETCH_BACKOFF_SECONDS", int(defaultConfigFetchBackoff/time.Second), "ERR-CONFIG-FETCH-BACKOFF")
+	opts := configFetchOptions{}
+	opts.retryInterval = configSecondsEnv("JOB_ITEM_CONFIG_FETCH_BACKOFF_SECONDS", int(defaultConfigFetchBackoff/time.Second), "ERR-CONFIG-FETCH-BACKOFF")
 	opts.maxInterval = configSecondsEnv("JOB_ITEM_CONFIG_FETCH_MAX_INTERVAL_SECONDS", int(defaultConfigFetchMaxInterval/time.Second), "ERR-CONFIG-FETCH-MAX")
 	opts.minGap = configSecondsEnv("JOB_ITEM_CONFIG_FETCH_MIN_GAP_SECONDS", int(defaultConfigFetchMinGap/time.Second), "ERR-CONFIG-FETCH-GAP")
 
-	if opts.maxInterval < opts.initialBackoff {
+	// The retry delay is constant (no exponential growth); the max-interval value only
+	// acts as a safety bound so a mistyped backoff cannot exceed it.
+	if opts.retryInterval > opts.maxInterval {
 		configWarn(fmt.Sprintf(
-			"JOB_ITEM_CONFIG_FETCH_MAX_INTERVAL_SECONDS (%s) is below the initial backoff (%s); clamping to the initial backoff",
-			opts.maxInterval, opts.initialBackoff), "ERR-CONFIG-FETCH-MAX-CLAMP")
-		opts.maxInterval = opts.initialBackoff
+			"JOB_ITEM_CONFIG_FETCH_BACKOFF_SECONDS (%s) exceeds JOB_ITEM_CONFIG_FETCH_MAX_INTERVAL_SECONDS (%s); clamping the fixed retry interval to %s",
+			opts.retryInterval, opts.maxInterval, opts.maxInterval), "ERR-CONFIG-FETCH-MAX-CLAMP")
+		opts.retryInterval = opts.maxInterval
 	}
 	return opts
 }
@@ -421,31 +419,17 @@ func withJitter(d time.Duration) time.Duration {
 	return time.Duration(float64(d) * factor)
 }
 
-// nextBackoff doubles current until it reaches max, then stays at max forever.
-func nextBackoff(current, max time.Duration) time.Duration {
-	if max <= 0 {
-		return current
-	}
-	next := current * 2
-	if next <= 0 || next > max {
-		return max
-	}
-	return next
-}
-
 // startBackgroundConfigRefresh keeps trying to refresh the on-disk cache while the
 // worker runs from a cached configuration. It never mutates the live config.
 func startBackgroundConfigRefresh(configYamlSupport *support.ConfigYamlSupport, opts configFetchOptions) {
 	go func() {
-		interval := opts.initialBackoff
 		for attempt := 1; ; attempt++ {
-			sleepFor := withJitter(interval)
-			configLog(fmt.Sprintf("config background refresh attempt %d scheduled in %s (running from cache)", attempt, sleepFor.Round(time.Millisecond)))
+			sleepFor := withJitter(opts.retryInterval)
+			configLog(fmt.Sprintf("config background refresh attempt %d scheduled in %s (running from cache, fixed interval)", attempt, sleepFor.Round(time.Millisecond)))
 			time.Sleep(sleepFor)
 
 			if err := configYamlSupport.RefreshCacheFromServer(); err != nil {
 				configWarn(fmt.Sprintf("config background refresh attempt %d failed: %v", attempt, err), "ERR-CONFIG-REFRESH")
-				interval = nextBackoff(interval, opts.maxInterval)
 				continue
 			}
 			configLog("config background refresh succeeded; cache updated (live config stays in use until next restart)")
@@ -471,7 +455,6 @@ func ensureWorkerInitialized(configYamlSupport *support.ConfigYamlSupport, confi
 // gives up (unlimited retries). ErrConfigFetchRefused is never retried because it means
 // the process is not allowed to fetch at all.
 func retryWorkerStartup(init func() error, opts configFetchOptions, maxAttempts int) error {
-	interval := opts.initialBackoff
 	for attempt := 1; ; attempt++ {
 		err := init()
 		if err == nil {
@@ -487,12 +470,11 @@ func retryWorkerStartup(init func() error, opts configFetchOptions, maxAttempts 
 			return err
 		}
 
-		sleepFor := withJitter(interval)
+		sleepFor := withJitter(opts.retryInterval)
 		configWarn(fmt.Sprintf(
-			"worker startup attempt %d failed: %v; process stays alive, retrying in %s (ceiling %s)",
-			attempt, err, sleepFor.Round(time.Millisecond), opts.maxInterval), "ERR-STARTUP-RETRY")
+			"worker startup attempt %d failed: %v; process stays alive, retrying in %s (fixed interval)",
+			attempt, err, sleepFor.Round(time.Millisecond)), "ERR-STARTUP-RETRY")
 		time.Sleep(sleepFor)
-		interval = nextBackoff(interval, opts.maxInterval)
 	}
 }
 
