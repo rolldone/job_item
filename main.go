@@ -458,6 +458,44 @@ func initMain(configYamlSupport *support.ConfigYamlSupport, config string) error
 	return initMainInternal(configYamlSupport, config, false)
 }
 
+// ensureWorkerInitialized bootstraps the root worker and keeps retrying forever on
+// failure, so a transient or incomplete configuration never kills the process.
+func ensureWorkerInitialized(configYamlSupport *support.ConfigYamlSupport, config string) error {
+	opts := loadConfigFetchOptions()
+	return retryWorkerStartup(func() error {
+		return initMain(configYamlSupport, config)
+	}, opts, 0)
+}
+
+// retryWorkerStartup calls init until it succeeds. With maxAttempts <= 0 the loop never
+// gives up (unlimited retries). ErrConfigFetchRefused is never retried because it means
+// the process is not allowed to fetch at all.
+func retryWorkerStartup(init func() error, opts configFetchOptions, maxAttempts int) error {
+	interval := opts.initialBackoff
+	for attempt := 1; ; attempt++ {
+		err := init()
+		if err == nil {
+			if attempt > 1 {
+				configLog(fmt.Sprintf("worker startup succeeded on attempt %d", attempt))
+			}
+			return nil
+		}
+		if errors.Is(err, support.ErrConfigFetchRefused) {
+			return err
+		}
+		if maxAttempts > 0 && attempt >= maxAttempts {
+			return err
+		}
+
+		sleepFor := withJitter(interval)
+		configWarn(fmt.Sprintf(
+			"worker startup attempt %d failed: %v; process stays alive, retrying in %s (ceiling %s)",
+			attempt, err, sleepFor.Round(time.Millisecond), opts.maxInterval), "ERR-STARTUP-RETRY")
+		time.Sleep(sleepFor)
+		interval = nextBackoff(interval, opts.maxInterval)
+	}
+}
+
 // initMainForRestart re-initializes the worker for a restart without contacting the
 // config server: it reuses the in-memory configuration and only refreshes local values.
 func initMainForRestart(configYamlSupport *support.ConfigYamlSupport, config string) error {
@@ -558,7 +596,10 @@ func initCli() bool {
 		// Example job_item --config=/var/www/html/config.yaml
 		Action: func(ctx *cli.Context) error {
 			var configYamlSupport support.ConfigYamlSupport
-			if err := initMain(&configYamlSupport, ctx.String("config")); err != nil {
+			// Startup is retried forever: an incomplete broker config returned by the server
+			// (e.g. missing "type") must not kill the worker. It stays alive, keeps logging
+			// and fetches the config again (subject to the config fetch cooldown).
+			if err := ensureWorkerInitialized(&configYamlSupport, ctx.String("config")); err != nil {
 				support.Helper.PrintErrName("Worker startup failed: "+err.Error(), "ERR-30350903209")
 				return err
 			}

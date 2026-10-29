@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+	"job_item/support"
 	"testing"
 	"time"
 )
@@ -77,5 +79,61 @@ func TestLoadConfigFetchOptionsClampsCeiling(t *testing.T) {
 	}
 	if opts.minGap != 5*time.Second {
 		t.Fatalf("minGap = %s, want 5s", opts.minGap)
+	}
+}
+
+func fastRetryOpts() configFetchOptions {
+	return configFetchOptions{
+		initialBackoff: time.Millisecond,
+		maxInterval:    2 * time.Millisecond,
+		minGap:         0,
+	}
+}
+
+func TestRetryWorkerStartupRetriesUntilSuccess(t *testing.T) {
+	attempts := 0
+	err := retryWorkerStartup(func() error {
+		attempts++
+		if attempts < 5 {
+			return errors.New("broker config missing")
+		}
+		return nil
+	}, fastRetryOpts(), 0)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if attempts != 5 {
+		t.Fatalf("attempts = %d, want 5", attempts)
+	}
+}
+
+func TestRetryWorkerStartupStopsOnRefusedFetch(t *testing.T) {
+	attempts := 0
+	err := retryWorkerStartup(func() error {
+		attempts++
+		return support.ErrConfigFetchRefused
+	}, fastRetryOpts(), 0)
+
+	if !errors.Is(err, support.ErrConfigFetchRefused) {
+		t.Fatalf("err = %v, want ErrConfigFetchRefused", err)
+	}
+	if attempts != 1 {
+		t.Fatalf("attempts = %d, want 1 (must not retry refused fetch)", attempts)
+	}
+}
+
+func TestRetryWorkerStartupHonorsMaxAttempts(t *testing.T) {
+	attempts := 0
+	err := retryWorkerStartup(func() error {
+		attempts++
+		return errors.New("still failing")
+	}, fastRetryOpts(), 3)
+
+	if err == nil {
+		t.Fatal("expected error after max attempts")
+	}
+	if attempts != 3 {
+		t.Fatalf("attempts = %d, want 3", attempts)
 	}
 }

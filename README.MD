@@ -655,6 +655,11 @@ The worker calls `POST {end_point}/api/worker/config`. `end_point` must **not** 
   server is unreachable the cache is used (with a warning when older than TTL) and a background refresher keeps
   retrying without mutating the live configuration.
 - **Child processes never fetch**: they receive `JOB_ITEM_CONFIG_DATA` and `JOB_ITEM_CONFIG_SOURCE=child`.
+- **Startup never exits on a retryable failure**: if the fetched configuration is incomplete (for example
+  `broker connection type is invalid: config "type" is not specified`), the worker stays alive, logs
+  `ERR-STARTUP-RETRY` and retries with the same backoff/ceiling, re-fetching the config (subject to the
+  cooldown). Fix the broker configuration on the server and the worker picks it up on the next attempt
+  without a manual restart.
 
 #### Broker connection retry and failure markers
 
