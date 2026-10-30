@@ -716,6 +716,21 @@ process so it can still answer after a restart.
 
 A terminated process is reported as `TERMINATED` by the worker/API; the Job Manager persists it as `TERMINATE` in `job_record.status`. This naming asymmetry is intentional, and `_finish` remains `"terminate"`.
 
+### Compatibility: minimum worker version
+
+The control listener (`ControlEvent.go`) was introduced in commit `f1285f3`. Workers **older**
+than that (e.g. production `a6cc665`) do not answer `check_status`, so the Job Manager reports
+`UNKNOWN` / `WORKER_UNRESPONSIVE`. The API response now includes a human-readable `message`
+explaining this. Deploy the worker at `f1285f3` or newer before relying on Check.
+
+### Job timeout ownership
+
+The worker does **not** enforce job idle timeout. The Job Manager owns the timeout value
+(`job_record.config.timeout`) and resets its timer whenever the worker publishes activity
+(`_who`, `_process`, notifications). The worker only reacts to `timeout` / `terminate` actions by
+killing the process tree. Treat the upload client timeout (`JOB_ITEM_UPLOAD_TIMEOUT_SECONDS`)
+as a separate concern from the manager's job timeout.
+
 Malformed payloads are ignored and never crash the worker. The lookup order is: SQLite store →
 in-memory registry fallback → `NOT_FOUND`.
 

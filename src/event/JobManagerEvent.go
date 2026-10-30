@@ -435,6 +435,23 @@ func (c *JobManagerEventItem) WatchProcessCMD(cmd *exec.Cmd, task_id string) {
 	// stderr reader: collect stderr but do not publish failed until process exit
 	var outputReaders sync.WaitGroup
 	outputReaders.Add(2)
+
+	// CP-2 (WO-2026-10-30-002): peringatan eksplisit (sekali, tanpa spam) bila
+	// progres worker tidak dapat dipublikasikan ke manager. End_point kosong atau
+	// broker tidak aktif berarti aktivitas tidak sampai ke manager, sehingga idle
+	// timer tidak di-reset dan timeout palsu dapat terjadi.
+	var warnEndPointEmpty sync.Once
+	warnIfEndPointEmpty := func() {
+		warnEndPointEmpty.Do(func() {
+			log.Printf("WARN activity not published to manager: End_point empty (task_id=%q); manager idle timeout may fire even while the job is active", task_id)
+		})
+	}
+	var warnPublishFailed sync.Once
+	warnIfPublishFailed := func() {
+		warnPublishFailed.Do(func() {
+			log.Printf("WARN activity not published to manager: broker connection inactive (task_id=%q); manager idle timeout may fire", task_id)
+		})
+	}
 	go func(conn support.BrokerConnectionInterface) {
 		defer outputReaders.Done()
 		stderrBuffer := make([]byte, 1024)
@@ -486,7 +503,13 @@ func (c *JobManagerEventItem) WatchProcessCMD(cmd *exec.Cmd, task_id string) {
 				_ = st.UpdateActivity(task_id)
 			}
 			if support.Helper.ConfigYaml.ConfigData.End_point != "" {
-				conn.Pub(task_id+"_process", string(stdoutBuffer[:n]))
+				if conn == nil || !conn.IsConnected() {
+					warnIfPublishFailed()
+				} else {
+					conn.Pub(task_id+"_process", string(stdoutBuffer[:n]))
+				}
+			} else {
+				warnIfEndPointEmpty()
 			}
 		}
 	}(c.conn)
