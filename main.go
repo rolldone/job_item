@@ -566,6 +566,27 @@ func initCli() bool {
 		},
 	}
 
+	// `update` shares the --config flag and adds target/output options.
+	updateFlags := append([]cli.Flag{}, flagConfig...)
+	updateFlags = append(updateFlags,
+		&cli.StringFlag{
+			Name:  "os",
+			Usage: "target OS (default: current OS)",
+		},
+		&cli.StringFlag{
+			Name:  "arch",
+			Usage: "target architecture (default: current architecture)",
+		},
+		&cli.StringFlag{
+			Name:  "out",
+			Usage: "output path (default: job_item_<os>_<arch>[.exe])",
+		},
+		&cli.BoolFlag{
+			Name:  "force",
+			Usage: "overwrite the output file if it already exists",
+		},
+	)
+
 	app := &cli.App{
 		Name:                 "job_item",
 		EnableBashCompletion: false,
@@ -643,6 +664,15 @@ func initCli() bool {
 
 					flag = "upload"
 					return nil
+				},
+			},
+			{
+				Flags: updateFlags,
+				Name:  "update",
+				Usage: "build & download this binary from the job manager, then replace the running binary",
+				Action: func(ctx *cli.Context) error {
+					flag = "update"
+					return runUpdate(ctx)
 				},
 			},
 			{

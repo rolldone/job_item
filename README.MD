@@ -179,6 +179,9 @@ CONFIG_PATH=/path/to/config.yaml ./job_item
 
 # Upload command (upload a local file to Job Manager)
 ./job_item upload <file_path>
+
+# Update command (build, download and replace the running binary)
+./job_item update
 ```
 
 ### Save Command
@@ -251,6 +254,52 @@ Notes:
 Timeouts and large files
 
 - `JOB_ITEM_UPLOAD_TIMEOUT_SECONDS`: configure how long the client will wait for the upload to complete (in seconds). Default is `300` (5 minutes). Increase this value for slower networks or very large files, or set to `0` to disable the client-side timeout. Also ensure any proxies (nginx, load balancer) have matching or higher timeouts and that `client_max_body_size` is large enough.
+
+### Update Command
+
+The `update` subcommand asks the Job Manager to build a **fresh** `job_item` binary for
+this machine's OS/architecture, downloads it, and replaces the running binary.
+
+```bash
+# Build for the current OS/architecture and replace the running binary
+./job_item update
+
+# Target another platform explicitly
+./job_item update --os=linux --arch=arm64
+
+# Save the downloaded binary somewhere else
+./job_item update --out=/tmp/job_item_linux_amd64
+
+# Overwrite an existing output file
+./job_item update --force
+```
+
+Flags:
+
+| Flag | Description |
+| --- | --- |
+| `--os` | Target OS: `linux`, `darwin`, `windows` (default: current OS) |
+| `--arch` | Target architecture: `amd64`, `386`, `arm64`, `arm` (default: current architecture) |
+| `--out` | Output path (default: `job_item_<os>_<arch>[.exe]`) |
+| `--force` | Overwrite the output file when it already exists |
+| `--config` | Configuration file (default: `config.yaml`) |
+
+Behavior:
+
+1. Detects the target OS/architecture (or uses `--os`/`--arch`).
+2. `POST /api/worker/agent/build` with `{"os":...,"arch":...}` — every run starts a **new** build.
+3. Polls `GET /api/worker/agent/build/<build_id>` until `completed`/`failed` (timeout).
+4. Downloads `GET /api/worker/agent/download/<build_id>?os=...&arch=...` and saves it as
+   `job_item_<os>_<arch>[.exe]`.
+5. Replaces the running binary (`ReplaceApp`) and prints a reminder to restart the worker.
+
+Authentication uses the project credential from `config.yaml` as
+`Authorization: Bearer <project_id>|<secret_key>`. Endpoint, timeout and polling interval
+can be tuned with `JOB_ITEM_UPDATE_TIMEOUT_SECONDS` (default `600`) and
+`JOB_ITEM_UPDATE_POLL_SECONDS` (default `2`).
+
+On Windows the running executable is locked, so the replacement takes effect after the
+worker process exits.
 
 #### Required Environment Variables
 The `save` command requires two environment variables to be set:
