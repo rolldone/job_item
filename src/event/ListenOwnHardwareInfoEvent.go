@@ -82,7 +82,24 @@ func (c *ListenOwnHardwareInfoEvent) ListenInfoHardware(conn_name string) {
 				return
 			}
 
-			hostInfoJsonString, err := json.Marshal(hostInfo)
+			// Keep the original host keys (including top-level "hostId" which the
+			// manager reads) and add runtime paths + a redacted config snapshot.
+			hostObject := map[string]interface{}{}
+			hostInfoBytes, err := json.Marshal(hostInfo)
+			if err != nil {
+				log.Fatalln(err)
+				return
+			}
+			if err := json.Unmarshal(hostInfoBytes, &hostObject); err != nil {
+				log.Fatalln(err)
+				return
+			}
+			hostObject["runtime"] = support.GetRuntimePaths()
+			if snapshot := support.GetConfigSnapshot(support.Helper.ConfigYaml); snapshot != nil {
+				hostObject["config_snapshot"] = snapshot
+			}
+
+			hostInfoJsonString, err := json.Marshal(hostObject)
 			if err != nil {
 				log.Fatalln(err)
 				return

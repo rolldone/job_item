@@ -585,6 +585,10 @@ func (c *ConfigYamlSupport) fetchAndMergeServerConfig() error {
 		return fmt.Errorf("error getting hardware info: %w", err)
 	}
 	param["host"] = hostInfo
+	// Absolute paths of the running worker + redacted config snapshot. Never
+	// include the credential block here (see ConfigSnapshot).
+	param["runtime"] = GetRuntimePaths()
+	param["config_snapshot"] = c.ConfigSnapshot()
 
 	jsonDataParam, err := json.Marshal(param)
 	if err != nil {
