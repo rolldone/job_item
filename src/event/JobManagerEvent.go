@@ -290,6 +290,15 @@ func (c *JobManagerEventItem) RunGoroutine(command string, task_id string, event
 		log.Printf("[TRACE-TERM] timestamp=%s stage=worker_callback task_id=%q topic=%q payload=%s", traceTimestamp, task_id, task_id+"_worker", message)
 		messageObject := MessageJson{}
 		json.Unmarshal([]byte(message), &messageObject)
+		// CP-1 (WO-2026-10-30-001) Task 4: catat action yang memicu kill secara
+		// eksplisit dengan alasan yang terbaca operator (bukan hanya label cleanup).
+		if messageObject.Action == GetStatus().STATUS_TIMEOUT || messageObject.Action == GetStatus().STATUS_TERMINATE {
+			reason := "kill requested by job manager idle timeout"
+			if messageObject.Action == GetStatus().STATUS_TERMINATE {
+				reason = "kill requested by external terminate action"
+			}
+			log.Printf("worker_kill action=%q task_id=%q project_uuid=%q reason=%q", messageObject.Action, messageObject.Task_id, project_app_uuid, reason)
+		}
 		if messageObject.Action == GetStatus().STATUS_TIMEOUT {
 			c.setIntentStatus(GetStatus().STATUS_TIMEOUT)
 			eventTopic := fmt.Sprint(messageObject.Task_id, "_", "timeout")
